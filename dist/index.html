@@ -7,12 +7,11 @@
   <link rel="icon" href="data:,">
   <title>Dragonfall — Endless Flight</title>
   <script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}</script>
-  <link rel="stylesheet" href="./style.css?v=7">
+  <link rel="stylesheet" href="./style.css?v=8">
 </head>
 <body>
  <main id="game">
   <canvas id="sky" aria-label="3D dragon flying through a mountain canyon"></canvas>
-  <div class="vignette" aria-hidden="true"></div>
   <header class="hud">
    <div class="wordmark"><span class="sigil">↟</span><span>DRAGONFALL<small>ENDLESS FLIGHT</small></span></div>
    <div id="distance" class="distance"><span id="meters">0</span><small>METERS FLOWN</small></div>
@@ -50,10 +49,13 @@
    <label class="setting-row" for="control-mode"><strong>Flight controls</strong><select id="control-mode"><option value="thumbs">Two thumbs</option><option value="tilt">Phone tilt</option></select></label>
    <div id="tilt-options"><p id="tilt-status" role="status">Hold your phone comfortably. Allow motion access when prompted. Your starting position becomes level flight.</p><button id="calibrate-tilt" type="button" class="text-button">Enable / recenter tilt</button></div>
    <label class="setting-row" for="invert-vertical"><span><strong>Invert up/down</strong><small id="invert-description">Slide both thumbs down to climb, up to dive.</small></span><input id="invert-vertical" type="checkbox" role="switch" checked aria-describedby="invert-description"></label>
+   <label class="setting-row" for="graphics"><span><strong>Graphics</strong><small id="graphics-description">Auto picks Phone on handhelds. Changing it restarts the game.</small></span><select id="graphics"><option value="auto">Auto</option><option value="high">High (film)</option><option value="phone">Phone (fast)</option></select></label>
+   <label class="setting-row" for="camera-mode"><span><strong>Camera</strong><small>Rider sits in the saddle; Chase follows from behind.</small></span><select id="camera-mode"><option value="rider">Rider (from the saddle)</option><option value="chase">Chase (behind the dragon)</option></select></label>
    <button class="primary-button" value="done">DONE</button></form>
   </dialog>
   <div id="flash" aria-hidden="true"></div>
+  <pre id="stats" class="stats" hidden></pre>
   <div id="error" class="error" hidden><h2>Your dragon needs WebGL 2</h2><p>Open this game in a current Chrome or Safari browser with hardware acceleration enabled.</p></div>
  </main>
- <script type="module" src="./game.js?v=7"></script>
+ <script type="module" src="./game.js?v=8"></script>
 </body></html>
