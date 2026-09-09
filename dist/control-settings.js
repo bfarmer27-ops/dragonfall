@@ -6,5 +6,6 @@ export function invertVerticalControls(left,right,enabled){
  return enabled?[-right,-left]:[left,right];
 }
 
-export function readControlMode(){try{return localStorage.getItem('dragonfall-control-mode')==='thumbs'?'thumbs':'tilt';}catch{return 'tilt';}}
+// Two thumbs is the default on every device (Ryan's order 2026-09-09); phone tilt stays selectable in Settings.
+export function readControlMode(){try{return localStorage.getItem('dragonfall-control-mode')==='tilt'?'tilt':'thumbs';}catch{return 'thumbs';}}
 export function saveControlMode(mode){try{localStorage.setItem('dragonfall-control-mode',mode);}catch{}}

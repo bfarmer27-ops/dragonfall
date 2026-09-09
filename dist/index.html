@@ -6,6 +6,7 @@
   <meta name="description" content="Take the wings. Glide a dragon through an endless misty canyon using two-thumb flight controls.">
   <link rel="icon" href="data:,">
   <title>Dragonfall — Endless Flight</title>
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}</script>
   <link rel="stylesheet" href="./style.css?v=7">
 </head>
 <body>
@@ -46,7 +47,7 @@
   </section>
   <dialog id="settings-dialog" aria-labelledby="settings-title">
    <form method="dialog"><div class="settings-heading"><h2 id="settings-title">Settings</h2><button class="icon-button" aria-label="Close settings" value="close">✕</button></div>
-   <label class="setting-row" for="control-mode"><strong>Flight controls</strong><select id="control-mode"><option value="tilt">Phone tilt</option><option value="thumbs">Two thumbs</option></select></label>
+   <label class="setting-row" for="control-mode"><strong>Flight controls</strong><select id="control-mode"><option value="thumbs">Two thumbs</option><option value="tilt">Phone tilt</option></select></label>
    <div id="tilt-options"><p id="tilt-status" role="status">Hold your phone comfortably. Allow motion access when prompted. Your starting position becomes level flight.</p><button id="calibrate-tilt" type="button" class="text-button">Enable / recenter tilt</button></div>
    <label class="setting-row" for="invert-vertical"><span><strong>Invert up/down</strong><small id="invert-description">Slide both thumbs down to climb, up to dive.</small></span><input id="invert-vertical" type="checkbox" role="switch" checked aria-describedby="invert-description"></label>
    <button class="primary-button" value="done">DONE</button></form>

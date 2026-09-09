@@ -25,7 +25,7 @@ Deploy dist to any static HTTPS host. Original hosting identity is intentionally
 
 ## Accepted controls and tuning
 Forward speed 1.75x original; sideways strength 1.5x original; vertical speed 2x original. Do not silently change these.
-Phone tilt is default; tilt inversion defaults OFF. Lift screen top edge to climb, lower to dive, tilt left/right to turn. Calibrate at start/resume; recenter in Settings. Screen rotation is supported.
+Two thumbs is the default on every device (Ryan's order 2026-09-09); phone tilt is selectable in Settings. Tilt inversion defaults OFF. Lift screen top edge to climb, lower to dive, tilt left/right to turn. Calibrate at start/resume; recenter in Settings. Screen rotation is supported.
 Two-thumb mode remains selectable; its inversion defaults ON with independently saved preferences. Non-inverted thumb mapping: both up climbs, both down dives, left down/right up banks left, opposite banks right. Inversion must only reverse pitch, never bank.
 Keyboard: arrows or W/S for left wing and I/K for right wing. On sensorless devices select Two thumbs in Settings.
 
