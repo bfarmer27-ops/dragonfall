@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07171b"><meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="description" content="Take the wings. Glide a dragon through an endless misty canyon using two-thumb flight controls.">
+  <title>Dragonfall — Endless Flight</title>
+  <link rel="stylesheet" href="./style.css?v=7">
+</head>
+<body>
+ <main id="game">
+  <canvas id="sky" aria-label="3D dragon flying through a mountain canyon"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+  <header class="hud">
+   <div class="wordmark"><span class="sigil">↟</span><span>DRAGONFALL<small>ENDLESS FLIGHT</small></span></div>
+   <div id="distance" class="distance"><span id="meters">0</span><small>METERS FLOWN</small></div>
+   <div class="actions">
+    <button id="settings" class="icon-button" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></button>
+    <button id="sound" class="icon-button" aria-label="Enable sound" title="Sound"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path id="sound-waves" d="m16 9 6 6m0-6-6 6"/></svg></button>
+    <button id="fullscreen" class="icon-button" aria-label="Enter fullscreen" title="Fullscreen"><svg viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+    <button id="pause" class="icon-button" aria-label="Pause flight" title="Pause"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
+   </div>
+  </header>
+  <div id="flight-hud" class="flight-hud">
+   <div class="health" aria-label="Three shields remaining"><i></i><i></i><i></i></div>
+   <div class="gate-score"><b id="gates">0</b><span>GATES</span></div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="wing-controls" class="wing-controls">
+   <div class="wing-pad left" id="left-wing" aria-label="Left wing: drag up or down"><div class="track"><span>⌃</span><i></i><span>⌄</span></div><div class="thumb"><span></span></div><small>LEFT WING</small></div>
+   <div class="wing-pad right" id="right-wing" aria-label="Right wing: drag up or down"><div class="track"><span>⌃</span><i></i><span>⌄</span></div><div class="thumb"><span></span></div><small>RIGHT WING</small></div>
+  </div>
+  <div class="telemetry" id="telemetry"><span><b id="speed">0</b> <small>KM/H</small></span><span class="horizon-line"></span><span><b id="altitude">0</b> <small>M ABOVE WATER</small></span></div>
+  <section id="intro" class="intro">
+   <div class="intro-title"><p>THE LONG DESCENT</p><h1>DRAGONFALL</h1><div class="title-line"></div><p class="subtitle">Take the wings. Find your flow.</p></div>
+   <div class="launch-panel">
+    <div class="instructions"><div><b id="climb-gesture">↓ ↓</b><span>CLIMB</span></div><div><b id="dive-gesture">↑ ↑</b><span>DIVE</span></div><div><b id="bank-left-gesture">↓ ↑</b><span>BANK LEFT</span></div><div><b id="bank-right-gesture">↑ ↓</b><span>BANK RIGHT</span></div></div>
+    <button id="start" class="primary-button">TAKE FLIGHT <span>↗</span></button>
+    <p class="mobile-hint">Slide each thumb to steer. Rotate your phone for landscape.</p><p class="desktop-hint">W / S · left wing &nbsp;&nbsp; I / K · right wing &nbsp;&nbsp; or use arrow keys to steer</p>
+    <span class="best-intro">PERSONAL BEST <b id="intro-best">0 m</b></span>
+   </div>
+  </section>
+  <section id="modal" class="modal" hidden>
+   <div class="modal-inner"><p class="eyebrow" id="modal-eyebrow">TAKE A BREATH</p><h2 id="modal-title">Flight paused</h2><p id="modal-message">The canyon will wait.</p><div id="run-stats" hidden><div><b id="final-distance">0</b><span>METERS FLOWN</span></div><div><b id="final-gates">0</b><span>GATES CAUGHT</span></div></div><button id="resume" class="primary-button">RESUME FLIGHT <span>↗</span></button><button id="restart" class="text-button">Start a new flight</button></div>
+  </section>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+   <form method="dialog"><div class="settings-heading"><h2 id="settings-title">Settings</h2><button class="icon-button" aria-label="Close settings" value="close">✕</button></div>
+   <label class="setting-row" for="control-mode"><strong>Flight controls</strong><select id="control-mode"><option value="tilt">Phone tilt</option><option value="thumbs">Two thumbs</option></select></label>
+   <div id="tilt-options"><p id="tilt-status" role="status">Hold your phone comfortably. Allow motion access when prompted. Your starting position becomes level flight.</p><button id="calibrate-tilt" type="button" class="text-button">Enable / recenter tilt</button></div>
+   <label class="setting-row" for="invert-vertical"><span><strong>Invert up/down</strong><small id="invert-description">Slide both thumbs down to climb, up to dive.</small></span><input id="invert-vertical" type="checkbox" role="switch" checked aria-describedby="invert-description"></label>
+   <button class="primary-button" value="done">DONE</button></form>
+  </dialog>
+  <div id="flash" aria-hidden="true"></div>
+  <div id="error" class="error" hidden><h2>Your dragon needs WebGL 2</h2><p>Open this game in a current Chrome or Safari browser with hardware acceleration enabled.</p></div>
+ </main>
+ <script type="module" src="./game.js?v=7"></script>
+</body></html>
