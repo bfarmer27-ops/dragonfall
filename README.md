@@ -1,7 +1,10 @@
 # Dragonfall — source handoff
 
 Current playable browser prototype, exported from commit ecfad6c880a8998baf82ffa1fcbe64a6c7ccba8f (Sites version 7).
-Live game: https://dragonfall-glide.jack6323.chatgpt.site
+Original ChatGPT-hosted copy: https://dragonfall-glide.jack6323.chatgpt.site
+
+**Play now (GitHub Pages, auto-deployed from `dist/` on every push to `main`):** https://bfarmer27-ops.github.io/dragonfall/
+**Repo:** https://github.com/bfarmer27-ops/dragonfall
 
 ## Run locally
 Python 3: `python -m http.server 8000 --directory dist`
