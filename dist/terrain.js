@@ -213,7 +213,7 @@ export function createBoulderGeometry(){
 const rockGLSL=`
 varying vec3 vWPos;varying vec3 vWNormal;
 uniform sampler2D uDiff;uniform sampler2D uNor;uniform sampler2D uArm;
-uniform float uTile;uniform float uDetailTile;uniform float uDetailMix;
+uniform float uTile;uniform float uDetailTile;uniform float uDetailMix;uniform float uHeightOffset;
 vec3 triWeights(vec3 n){vec3 w=pow(abs(n),vec3(6.));return w/max(w.x+w.y+w.z,1e-4);}
 vec4 tri(sampler2D t,vec3 p,vec3 w){return texture2D(t,p.zy)*w.x+texture2D(t,p.xz)*w.y+texture2D(t,p.xy)*w.z;}
 vec3 triNormal(sampler2D t,vec3 p,vec3 w,vec3 n){
@@ -229,7 +229,9 @@ float vnoise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
 // Rock material: MeshStandardMaterial so it gets shadows, IBL, fog and tone mapping for free; the triplanar maps are spliced in.
 // One CC0 texture set (cliff_side) is tinted three ways: dark wet basalt low, warm sandstone strata, moss on gentle ledges.
 // Do NOT add fog code here: sky.js overrides the standard fog chunks and MeshStandardMaterial picks them up automatically.
-export function createRockMaterial(renderer,{textureSize}={}){
+// Options: textureSize ('1k'|'2k'), heightOffset (metres added to the height the tints read, so boulders can show the
+// sandstone strata instead of the wet-basalt tint), textures ([diff, nor, arm] to share with another rock material).
+export function createRockMaterial(renderer,{textureSize,heightOffset=0,textures}={}){
  const tier=TIER,budget=BUDGET[tier];
  textureSize=textureSize||budget.textureSize;
  const loader=new THREE.TextureLoader();
@@ -237,9 +239,9 @@ export function createRockMaterial(renderer,{textureSize}={}){
  const aniso=Math.min(tier==='high'?16:4,renderer.capabilities.getMaxAnisotropy());
  // Resolve against this module (dist/), not the page, so dev pages under dist/dev/ find the same files.
  const tex=(name,srgb)=>{const t=loader.load(new URL(`./assets/cliff_side_${name}_${textureSize}.jpg`,import.meta.url).href);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=aniso;if(srgb)t.colorSpace=THREE.SRGBColorSpace;return t;};
- const diff=tex('diff',true),nor=tex('nor_gl',false),arm=tex('arm',false);
+ const [diff,nor,arm]=textures||[tex('diff',true),tex('nor_gl',false),tex('arm',false)];
  const mat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:1,metalness:0});
- mat.userData.uniforms={uDiff:{value:diff},uNor:{value:nor},uArm:{value:arm},uTile:{value:1/27},uDetailTile:{value:1/3.6},uDetailMix:{value:tier==='high'?1:0}};
+ mat.userData.uniforms={uDiff:{value:diff},uNor:{value:nor},uArm:{value:arm},uTile:{value:1/27},uDetailTile:{value:1/3.6},uDetailMix:{value:tier==='high'?1:0},uHeightOffset:{value:heightOffset}};
  mat.userData.textures=[diff,nor,arm];
  mat.onBeforeCompile=shader=>{
   Object.assign(shader.uniforms,mat.userData.uniforms);
@@ -262,19 +264,26 @@ export function createRockMaterial(renderer,{textureSize}={}){
     #ifdef ROCK_DETAIL
      vec3 fine=tri(uDiff,vWPos*uDetailTile,tw).rgb;alb*=mix(vec3(1.),fine*1.9,.45*uDetailMix);
     #endif
+    // Close-range layer (both tiers): within ~80 m of the eye the wall gets a third, 0.9 m tile of albedo and normal
+    // so the near wall beside the saddle shows grain and ledges instead of one smeared macro texel.
+    float viewDist=distance(vWPos,cameraPosition);
+    float nearMix=smoothstep(90.,25.,viewDist)*.5;
+    if(nearMix>.001){vec3 nearAlb=tri(uDiff,vWPos*(1./.9),tw).rgb;alb*=mix(vec3(1.),nearAlb*1.9,nearMix);}
     vec4 tArm=tri(uArm,vWPos*uTile,tw);
-    float height=vWPos.y-vWPos.z*${worldSlope};// height above the river, slope removed
+    float height=vWPos.y-vWPos.z*${worldSlope}+uHeightOffset;// height above the river, slope removed
     float slope=1.-gn.y;
     // Strata: bands warped by a low-frequency noise so they undulate, and only some regions of the canyon are banded
     // sandstone; the rest is massive dark basalt. Large-scale colour variation stops the "brick wall" look.
     float warp=vnoise(vec2(vWPos.x*.018,vWPos.z*.02))*.9+vnoise(vec2(vWPos.z*.05,vWPos.y*.4))*.25;
     float strata=smoothstep(.3,.7,fract(height*.06+warp));
     float banded=smoothstep(.42,.75,vnoise(vWPos.xz*.011+3.7));
-    vec3 sand=vec3(.60,.55,.50),basalt=vec3(.25,.26,.29),moss=vec3(.26,.40,.15);
+    // Basalt .36 (was .25) and a lighter, thinner wet zone: the shaded near wall measured 2/255 (a black smear with no
+    // strata) while the references keep visible stratified rock on the shadow side at every distance.
+    vec3 sand=vec3(.60,.55,.50),basalt=vec3(.36,.36,.39),moss=vec3(.26,.40,.15);
     vec3 tint=mix(basalt,mix(basalt,sand,strata),smoothstep(170.,50.,height)*(banded*.6+.35)+.05);
     tint*=mix(.62,1.05,vnoise(vWPos.xz*.03+11.));
     float wet=1.-smoothstep(0.,14.,height);
-    tint=mix(tint,vec3(.12,.14,.16),wet*.85);
+    tint=mix(tint,vec3(.17,.19,.21),wet*.55);
     float mossy=smoothstep(.45,.15,slope)*smoothstep(90.,30.,height)*(1.-wet)*smoothstep(.4,.7,vnoise(vWPos.xz*.06));
     tint=mix(tint,moss,mossy);
     // The rims sit under the storm sky: darken the wall above 120 m so they never glow brighter than the sunlit mid-wall.
@@ -292,10 +301,17 @@ export function createRockMaterial(renderer,{textureSize}={}){
     #ifdef ROCK_DETAIL
      vec3 wnFine=triNormal(uNor,vWPos*uDetailTile,tw,gn);wn=normalize(wn+wnFine*.5*uDetailMix);
     #endif
+    if(nearMix>.001){vec3 wnNear=triNormal(uNor,vWPos*(1./.9),tw,gn);wn=normalize(wn+wnNear*nearMix);}
     normal=normalize((viewMatrix*vec4(wn,0.)).xyz);
    `)
    .replace('#include <aomap_fragment>',`
-    float ambientOcclusion=mix(.6,1.,tArm.r)*mix(.55,1.,smoothstep(0.,26.,height));
+    float ambientOcclusion=mix(.6,1.,tArm.r)*mix(.72,1.,smoothstep(0.,26.,height));// floor .72 (was .55): keeps strata visible low on the shaded wall
+    // Sky fill for the shadow side. The HDRI is a dim sunset (mean sky radiance well under 1) and three divides the
+    // HemisphereLight by pi, so the wall facing away from the sun measured 0-16/255 against 40-60 in the references.
+    // This is the blue-grey overcast sky the references show, weighted by how much sky the face sees (gn.y), not by pi.
+    // 1.8 x the fill colour = sky radiance ~0.45 next to a 3.2 sun (an overcast sky): a vertical shaded wall with
+    // albedo ~0.18 lands near 0.045 linear = ~40/255 after ACES, the reference level. At .30 it measured 9/255.
+    reflectedLight.indirectDiffuse+=diffuseColor.rgb*vec3(.16,.25,.35)*.7*(.55+.45*gn.y);// .7 on top of the PMREM sky (sky.js skyBoost 2.5): shaded near wall ~25-35/255, references 40-60
     // Undersides of ledges see no sky: darken by the geometric normal's downward tilt (the HDRI's ground half is bright
     // sunset sand and would otherwise light them like a floor).
     ambientOcclusion*=mix(.42,1.,smoothstep(-.6,.2,gn.y));// .42, not .22: at .22 a 20 m arch underside was a black cut-out (v080 frame 3 shows it warm-lit)
@@ -310,7 +326,7 @@ export function createRockMaterial(renderer,{textureSize}={}){
     #endif
    `);
  };
- mat.customProgramCacheKey=()=>'rock-'+tier;
+ mat.customProgramCacheKey=()=>'rock-'+tier;   // heightOffset is a uniform, so one program serves walls and boulders
  return mat;
 }
 

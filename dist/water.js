@@ -7,7 +7,7 @@ import {TIER} from './quality.js';
 
 // Two colour moods: 'teal' (v080: opaque bright river) and 'dark' (v059/v066: near-black mirror between dark walls).
 const MOODS={
- teal:{deep:0x0a4048,shallow:0x2c9da3},
+ teal:{deep:0x0c3a44,shallow:0x3a8c92},   // muted teal (v080); 0x2c9da3 read as a saturated cyan plate
  dark:{deep:0x06262c,shallow:0x1b5c62}
 };
 
@@ -54,7 +54,9 @@ export function createWater({renderer}){
     vec3 waterCol=mix(uShallow,uDeep,depthT);
     float foamNoise=texture2D(uNoise,vWPos.xz*.05+vec2(uTime*.02,0.)).r*.6+texture2D(uNoise,vWPos.xz*.17-vec2(0.,uTime*.05)).r*.4;
     // A thin broken line of foam at the bank (v080): a wide continuous band read as a beige road from the saddle.
-    float foam=smoothstep(4.5,0.,shore)*smoothstep(.5,.8,foamNoise);
+    // A third, larger noise gates the band so the foam is broken patches, not a continuous beige road edge.
+    float foamBreak=texture2D(uNoise,vWPos.xz*.31+vec2(-uTime*.01,uTime*.015)).r;
+    float foam=smoothstep(4.5,0.,shore)*smoothstep(.5,.8,foamNoise)*smoothstep(.35,.85,foamBreak);
     float cd=centerDist(vWPos);
     float currentNoise=texture2D(uNoise,vec2(vWPos.x*.08,vWPos.z*.02+uTime*.03)).r;
     float current=smoothstep(8.,2.,cd)*smoothstep(.55,.8,currentNoise)*.25;
@@ -67,7 +69,7 @@ export function createWater({renderer}){
     // Roughness floor 0.14: below that the sun's GGX peak on the water is thousands of times brighter than the scene and
     // the bloom pass smears it over the walls. The glitter noise still breaks the highlight into moving sparkles.
     float glitter=texture2D(uNoise,vWPos.xz*.32+vec2(uTime*.11,-uTime*.07)).r;
-    float roughnessFactor=mix(.2,.5,glitter);
+    float roughnessFactor=mix(.14,.35,glitter);
     roughnessFactor=mix(roughnessFactor,.9,foam);
    `)
    // Two normal layers scrolling in different directions, whiteout-blended, mapped from the +Y plane into view space.
@@ -91,7 +93,9 @@ export function createWater({renderer}){
     #include <lights_fragment_maps>
     vec3 rView=reflect(-geometryViewDir,normal);
     vec3 rWorld=transpose(mat3(viewMatrix))*rView;
-    float wallOcc=mix(.12,1.,smoothstep(.03,.4,rWorld.y))*(1.-.55*smoothstep(.35,.85,abs(rWorld.x)));
+    // Floor .35 (was .12): at .12 every reflection that was not straight up went flat, so no wall or sky detail
+    // showed in the water beyond ~40 m. The lit wall now mirrors in the river like v080.
+    float wallOcc=mix(.35,1.,smoothstep(.03,.4,rWorld.y))*(1.-.4*smoothstep(.35,.85,abs(rWorld.x)));
     // The HDR sun is ~240,000x brighter than the sky; mirrored straight into the eye it becomes a white blob that floods
     // the bloom pass. Clamp the reflected sky and let the DirectionalLight + glitter roughness make the sparkle instead.
     radiance=min(radiance*wallOcc,vec3(4.));

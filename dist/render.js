@@ -66,7 +66,7 @@ function makeGradeShader(motionTaps) {
    tDiffuse: {value: null},
    uTime: {value: 0},
    uRes: {value: new THREE.Vector2(1280, 720)},     // drawing-buffer pixels: grain hash must use pixels, not vUv
-   uContrast: {value: 1.16},
+   uContrast: {value: 1.10},   // 1.16 pivoted at 0.5 mapped sRGB 0.10 to 0.036: every dark foreground tone lost ~40% (2026-09-09 fix)
    uSat: {value: 1.06},
    uCA: {value: 1.4},
    uVignette: {value: 0.5},

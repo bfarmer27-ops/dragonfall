@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import {TIER, setTier, readTierSetting} from './quality.js';
 import {createRenderSystem} from './render.js';
 import {createSky} from './sky.js';
-import {createTerrain, terrainHeight, createArchGeometry, createBoulderGeometry, worldSlope} from './terrain.js';
+import {createTerrain, terrainHeight, createArchGeometry, createBoulderGeometry, createRockMaterial, worldSlope} from './terrain.js';
 import {createWater} from './water.js';
 import {createDressing} from './dressing.js';
 import {createDragon, mergeRigid} from './dragon.js';
@@ -91,6 +91,7 @@ const {dragon} = model;
 scene.add(dragon);
 model.setSun(sky.sunDirection, sky.sunColor);
 const rider = createRider({saddleAnchor: model.saddleAnchor, bridleAnchors: model.bridleAnchors});
+const eyeBase = rider.eye.position.clone();   // rest position of the eye in saddle metres; hit recovery offsets from it
 if (tier === 'phone') {
  // Phone budget: the rider's shadow falls behind the eye (sun ahead), and the 43 pommel stitches are one more call.
  rider.group.traverse(m => { if (m.isMesh) { m.castShadow = false; if (m.material === rider.materials.thread) m.visible = false; } });
@@ -151,6 +152,9 @@ for (let i = 0; i < 10; i++) {
 // Obstacles (boulders) and arches: terrain geometries drawn with the shared triplanar rock material.
 // ---------------------------------------------------------------------------------------------
 const rockGeometry = createBoulderGeometry();
+// Boulders share the wall textures but read their height 40 m higher, so they show the warm sandstone banding instead
+// of the dark wet-basalt tint every rock under ~50 m gets (they read as flat grey pillars at 150-300 m otherwise).
+const boulderMaterial = createRockMaterial(renderer, {heightOffset: 40, textures: terrain.rockMaterial.userData.textures});
 const obstacles = [];
 function setObstacle(o, n) {
  o.n = n;
@@ -163,7 +167,7 @@ function setObstacle(o, n) {
  o.mesh.rotation.y = hash(n, 7) * Math.PI;
 }
 for (let i = 0; i < 9; i++) {
- const mesh = new THREE.Mesh(rockGeometry, terrain.rockMaterial);
+ const mesh = new THREE.Mesh(rockGeometry, boulderMaterial);
  scene.add(mesh);
  const o = {mesh};
  setObstacle(o, i);
@@ -195,6 +199,7 @@ const pointers = {left: null, right: null}, inputs = {left: 0, right: 0}, keys =
 function updatePad(side, v, active) {
  const el = $(side + '-wing');
  el.classList.toggle('active', active);
+ if (active) el.classList.add('touched');   // after the first touch the LEFT WING / RIGHT WING labels fade out (CSS)
  el.querySelector('.thumb').style.top = (66 - v * 53) + 'px';
 }
 function resetInputs() {
@@ -260,7 +265,10 @@ function controls() {
   return [l, r];
  }
  const t = controlMode === 'tilt' ? tilt.read() : {pitch: 0, bank: 0};
- const pitch = t.pitch + (keys.has('arrowup') ? 1 : 0) - (keys.has('arrowdown') ? 1 : 0);
+ // Arrow up always climbs: the Invert setting is a thumb/tilt gesture preference, so the arrow term is pre-flipped
+ // to cancel the inversion applied at the end of this function.
+ const arrowPitch = ((keys.has('arrowup') ? 1 : 0) - (keys.has('arrowdown') ? 1 : 0)) * (invertVertical ? -1 : 1);
+ const pitch = t.pitch + arrowPitch;
  const turn = t.bank + (keys.has('arrowleft') ? 1 : 0) - (keys.has('arrowright') ? 1 : 0);
  const l = clamp(inputs.left + (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0) + pitch - turn, -1, 1);
  const r = clamp(inputs.right + (keys.has('i') ? 1 : 0) - (keys.has('k') ? 1 : 0) + pitch + turn, -1, 1);
@@ -358,8 +366,10 @@ function hit(reason) {
  if (navigator.vibrate) navigator.vibrate(70);
  if (audioEnabled) chime(95, 0.23);
  if (flight.health <= 0) { gameOver(); return; }
+ const altBefore = flight.alt, xBefore = flight.x;
  flight.alt = Math.max(flight.alt + 9, 18);
  flight.x = THREE.MathUtils.lerp(flight.x, centerAt(flight.distance), 0.48);
+ hideHitCut(flight.x - xBefore, flight.alt - altBefore);
  flight.speed *= 0.8;
  toast(reason + ' · ' + flight.health + ' SHIELDS LEFT');
 }
@@ -546,8 +556,28 @@ function setCameraMode(next) {
  placeWingPads();
 }
 
-// Chase camera: unchanged from the accepted build.
+// Chase camera. The spot 17 m behind and 6.4 m above the dragon is often inside the rock next to a wall (terrainHeight
+// now includes spires and terraces), so the camera is pulled in along the dragon->camera line while rock stands above
+// that line (3 samples, down to 8 m) and then lifted to at least 2.5 m over the collision profile at its final spot.
+// terrainHeight is conservative (the visible mesh only ever recedes from it), so clearing it clears the mesh.
 const target = new THREE.Vector3(), desiredCamera = new THREE.Vector3(), lookTarget = new THREE.Vector3();
+function chaseGroundAt(x, d) { return terrainHeight(x, d) - d * worldSlope; }
+function keepChaseCameraOutOfRock(cam, dist) {
+ const h = flight.alt - flight.distance * worldSlope;
+ let camDist = dist;
+ for (let attempt = 0; attempt < 4; attempt++) {
+  let blocked = false;
+  for (const t of [0.4, 0.7, 1]) {
+   const d = flight.distance - camDist * t;
+   const x = flight.x + (cam.x - flight.x) * t, y = h + (cam.y - h) * t;
+   if (chaseGroundAt(x, d) > y - 1.5) blocked = true;
+  }
+  if (!blocked || camDist <= 8) break;
+  camDist = Math.max(8, camDist - 3);
+ }
+ cam.z = -flight.distance + camDist;
+ cam.y = Math.max(cam.y, chaseGroundAt(cam.x, flight.distance - camDist) + 2.5);
+}
 const cameraAnchor = new THREE.Vector3(), newAnchor = new THREE.Vector3(), cameraTravel = new THREE.Vector3();
 function positionCamera(dt, instant = false) {
  const aspect = viewportWidth / viewportHeight, dist = aspect < 0.85 ? 19 : aspect < 1.2 ? 18 : 17, h = flight.alt - flight.distance * worldSlope;
@@ -560,6 +590,7 @@ function positionCamera(dt, instant = false) {
  cameraAnchor.copy(newAnchor);
  const steeringLead = flight.vx / getSpeedMultiplier();
  desiredCamera.set(flight.x + steeringLead * 0.035, h + 6.4, -flight.distance + dist);
+ keepChaseCameraOutOfRock(desiredCamera, dist);
  target.set(flight.x + clamp(steeringLead * 0.14, -7, 7), h + 1.5, -flight.distance - 35);
  camera.position.lerp(desiredCamera, instant ? 1 : 1 - Math.exp(-15 * dt));
  lookTarget.lerp(target, instant ? 1 : 1 - Math.exp(-12 * dt));
@@ -571,6 +602,16 @@ function positionCamera(dt, instant = false) {
  camera.updateProjectionMatrix();
 }
 
+// A hit moves the dragon 8-12 m in one physics step (up and toward the canyon centre). The rider camera is hard-parented
+// to the saddle, so without this the view would cut. The eye is offset by the opposite of that jump (dragon-local
+// metres) and the offset is damped back to zero over ~0.5 s, so the correction reads as a smooth recovery.
+const hitOffset = new THREE.Vector3(), _hitLocal = new THREE.Vector3(), _hitQuat = new THREE.Quaternion();
+function hideHitCut(dx, dAlt) {
+ if (cameraMode !== 'rider') return;
+ _hitLocal.set(-dx, -dAlt, 0).applyQuaternion(_hitQuat.copy(dragon.quaternion).invert());
+ hitOffset.add(_hitLocal);
+}
+
 // Rider camera: the camera hangs off rider.eye (which owns pitch, roll, yaw, bob and shake); here we only
 // widen the field of view with speed, feed the reins the steering, and drive DOF focus and turn motion blur.
 let prevRoll = 0;
@@ -579,7 +620,14 @@ function updateRiderCamera(dt, l, r) {
  const mult = getSpeedMultiplier();
  rider.setSteeringLead(flight.vx / mult);
  rider.update(l, r, flight, dt);
- const targetFov = (aspect < 0.85 ? 74 : 56) + (flight.speed / mult - 35) * 0.11 + (flight.pitch < -0.15 ? 4 : 0);
+ hitOffset.x = damp(hitOffset.x, 0, 6, dt);
+ hitOffset.y = damp(hitOffset.y, 0, 6, dt);
+ hitOffset.z = damp(hitOffset.z, 0, 6, dt);
+ rider.eye.position.x = eyeBase.x + hitOffset.x;   // rider.update owns y (bob + thump); x/z are ours
+ rider.eye.position.y += hitOffset.y;
+ rider.eye.position.z = eyeBase.z + hitOffset.z;
+ // 16:9 base fov 62 (was 56) so both wing leading edges cross the frame; portrait stays 74.
+ const targetFov = (aspect < 0.85 ? 74 : 62) + (flight.speed / mult - 35) * 0.11 + (flight.pitch < -0.15 ? 4 : 0);
  camera.fov = damp(camera.fov, targetFov, 2, dt);
  camera.aspect = aspect;
  camera.updateProjectionMatrix();
@@ -598,6 +646,8 @@ function updateRiderCamera(dt, l, r) {
 // Portrait: rider mode keeps the stylesheet's default spots; chase mode projects the wing roots like before.
 function placeWingPads() {
  const landscape = viewportWidth > viewportHeight;
+ // pads-corner: the stylesheet parks both pads in the bottom corners (landscape, and portrait rider mode).
+ document.body.classList.toggle('pads-corner', landscape || cameraMode === 'rider');
  if (landscape || cameraMode === 'rider') {
   for (const side of ['left', 'right']) { const el = $(side + '-wing'); el.style.left = ''; el.style.top = ''; }
   return;
@@ -679,8 +729,13 @@ function updateWorld(dt) {
  }
  if (mode === 'playing') {
   const ground = terrainHeight(flight.x, flight.distance);
+  // The wings (7 m either side) and the head (3 m ahead) test the rock too, so the 1.6-scale dragon can no longer
+  // fly with a wing or the rider's eye inside a wall beside it (single-point test before; cheap CPU noise calls).
+  const wingRock = Math.max(terrainHeight(flight.x - 7, flight.distance), terrainHeight(flight.x + 7, flight.distance));
+  const headRock = terrainHeight(flight.x, flight.distance + 3);
   if (flight.alt < 3) hit('WATER GRAZE');
-  else if (flight.alt < ground + 1.8) hit('CLIFF GRAZE');
+  else if (flight.alt < ground + 1.8 || flight.alt < headRock + 1.8) hit('CLIFF GRAZE');
+  else if (flight.alt + 1.8 < wingRock) hit('WING GRAZE');
   if (flight.alt > 84 && flight.elapsed % 4 < dt) toast('THIN AIR · LOWER YOUR WINGS');
  }
 }
@@ -751,7 +806,7 @@ function updateStats(dt) {
 }
 if (showStats) statsEl.hidden = false;
 // ?debug=1 also exposes the live objects for headless inspection (never used by the game itself).
-if (debug) window.__game = {camera, rider, model, dragon, scene, rs, sky, terrain, dressing, get flight() { return flight; }, get mode() { return mode; }, get cameraMode() { return cameraMode; }, setCameraMode, hit};
+if (debug) window.__game = {camera, rider, model, dragon, scene, rs, sky, terrain, dressing, hitOffset, positionCamera, get flight() { return flight; }, get mode() { return mode; }, get cameraMode() { return cameraMode; }, setCameraMode, hit};
 
 // ---------------------------------------------------------------------------------------------
 // Frame loop: controls -> physics + world -> dragon -> camera -> terrain/water/dressing/sky -> UI -> render

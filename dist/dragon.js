@@ -233,7 +233,7 @@ export function createDragon(renderer){
  const uBreath={value:0};
  const uTime={value:0};
  const uFlutter={value:0};
- const uSunDir={value:new THREE.Vector3(-0.18,0.40,-0.90).normalize()};
+ const uSunDir={value:new THREE.Vector3(-0.18,0.21,-0.90).normalize()};   // mirrors sky.js SUN_DIRECTION; game.js calls setSun()
  const uSunColor={value:new THREE.Color(0xffd7a8).multiplyScalar(3.2)};
  const uTranslucency={value:high?.9:1.1};
 
@@ -243,8 +243,23 @@ export function createDragon(renderer){
    .replace('#include <common>','#include <common>\nuniform float uBreath;')
    .replace('#include <begin_vertex>',BREATH_VERTEX);
  }
+ // Rim light for the skin materials on both tiers. The sun is AHEAD of the dragon, so from the saddle
+ // the rider only sees the unlit back of the neck; a grazing-angle term in the sun colour draws the
+ // silhouette edge the way the v066 frames do (dark neck with a bright rim, scales still readable).
+ const RIM_GLSL=`#include <lights_fragment_end>
+{
+ float rim = pow(1.0 - saturate(dot(normal, geometryViewDir)), 3.0);
+ reflectedLight.directSpecular += uSunColor * 0.12 * rim;
+}`;
+ function rimHook(shader){
+  shader.uniforms.uSunColor=uSunColor;
+  shader.fragmentShader=shader.fragmentShader
+   .replace('#include <common>','#include <common>\nuniform vec3 uSunColor;')
+   .replace('#include <lights_fragment_end>',RIM_GLSL);
+ }
  function skinHook(shader){
   breathHook(shader);
+  rimHook(shader);
   if(!high)return;
   shader.vertexShader=shader.vertexShader
    .replace('#include <common>','#include <common>\n'+SKIN_NOISE_GLSL)
@@ -254,12 +269,14 @@ export function createDragon(renderer){
    .replace('#include <color_fragment>',`#include <color_fragment>
  float macro = vnoise(vObjPos * 0.9) * 0.65 + vnoise(vObjPos * 2.1 + 7.3) * 0.35;
  diffuseColor.rgb *= 0.85 + 0.25 * macro;
- diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.7, smoothstep(0.3, 0.9, normalize(vObjNormal).y));`);
+ // Upward-facing skin is what the rider looks at and it faces the sky fill: lift it a little (it used to be
+ // darkened by 0.7, which is why the neck read as a black tube from the saddle).
+ diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.12, smoothstep(0.3, 0.9, normalize(vObjNormal).y));`);
  }
 
  // ---- materials (assigned at creation so the bakes batch by material; trap T2)
  const skin=new THREE.MeshPhysicalMaterial({
-  color:0x5a6a5c,map:albedo,normalMap,normalScale:new THREE.Vector2(1.7,1.7),
+  color:0x7a8a78,map:albedo,normalMap,normalScale:new THREE.Vector2(1.7,1.7),   // was 0x5a6a5c (~13% linear): unreadable from the saddle
   roughnessMap:armMap,roughness:1,aoMap:armMap,aoMapIntensity:.9,metalness:0,
   clearcoat:.32,clearcoatRoughness:.45,clearcoatNormalMap:normalMap,clearcoatNormalScale:new THREE.Vector2(1.7,1.7),
   sheen:high?.25:0,sheenColor:new THREE.Color(0x3d5a4a),sheenRoughness:.6,
@@ -268,11 +285,11 @@ export function createDragon(renderer){
  skin.onBeforeCompile=skinHook;
  skin.customProgramCacheKey=()=>'dragon-skin-'+(high?'high':'phone');
  const armor=new THREE.MeshPhysicalMaterial({
-  color:0x3f4a41,map:albedo,normalMap,normalScale:new THREE.Vector2(1,1),
+  color:0x5f6c5f,map:albedo,normalMap,normalScale:new THREE.Vector2(1,1),
   roughnessMap:armMap,roughness:1,aoMap:armMap,aoMapIntensity:.9,metalness:0,
   clearcoat:.4,clearcoatRoughness:.4,clearcoatNormalMap:normalMap,clearcoatNormalScale:new THREE.Vector2(1,1)
  });
- armor.onBeforeCompile=breathHook;
+ armor.onBeforeCompile=shader=>{breathHook(shader);rimHook(shader);};
  armor.customProgramCacheKey=()=>'dragon-armor';
  // Dark keratin for horns, spikes, claws and the jaw ridge. Never ivory (bright horns were the
  // worst thing in the prototype shots).
@@ -280,12 +297,15 @@ export function createDragon(renderer){
  keratin.onBeforeCompile=breathHook;
  keratin.customProgramCacheKey=()=>'dragon-keratin';
  const limbSkin=new THREE.MeshPhysicalMaterial({
-  color:0x4a5a4c,map:albedo,normalMap,normalScale:new THREE.Vector2(1.5,1.5),
+  color:0x6e7e6c,map:albedo,normalMap,normalScale:new THREE.Vector2(1.5,1.5),
   roughnessMap:armMap,roughness:1,aoMap:armMap,aoMapIntensity:.9,metalness:0,
   clearcoat:.32,clearcoatRoughness:.45,clearcoatNormalMap:normalMap,clearcoatNormalScale:new THREE.Vector2(1.5,1.5)
  });
+ limbSkin.onBeforeCompile=rimHook;
+ limbSkin.customProgramCacheKey=()=>'dragon-limb';
  const membrane=new THREE.MeshPhysicalMaterial({
-  color:0x4b3b33,roughness:.75,metalness:0,side:THREE.DoubleSide,vertexColors:true,
+  // 0x6e5646 (was 0x4b3b33, black from the saddle): dark warm membrane that still shows its veins and sag in the fill.
+  color:0x6e5646,roughness:.75,metalness:0,side:THREE.DoubleSide,vertexColors:true,
   sheen:high?1.0:0,sheenColor:new THREE.Color(0xd98a55),sheenRoughness:.55
  });
  const eyeMat=new THREE.MeshStandardMaterial({color:0xc9d28d,emissive:0x6a7a2a,emissiveIntensity:.6,roughness:.3});
@@ -320,6 +340,7 @@ transformed.y += sin(position.x * 1.4 - uTime * 9.0) * 0.04 * smoothstep(3.0, 10
   shader.fragmentShader=shader.fragmentShader
    .replace('#include <common>','#include <common>\nuniform vec3 uSunDir; uniform vec3 uSunColor; uniform float uTranslucency;')
    .replace('#include <roughnessmap_fragment>','#include <roughnessmap_fragment>\nroughnessFactor *= 0.8 + 0.4 * vColor.g;')
+   .replace('#include <lights_fragment_end>',RIM_GLSL)   // same sun rim as the skin (uSunColor is declared above)
    .replace('#include <emissivemap_fragment>',`#include <emissivemap_fragment>
 {
  vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
@@ -505,7 +526,9 @@ transformed.y += sin(position.x * 1.4 - uTime * 9.0) * 0.04 * smoothstep(3.0, 10
      v.y-=Math.sin(Math.PI*r)*Math.sin(Math.PI*t)*.21;
      pos.push(v.x,v.y,v.z);
      uv.push(v.x*.1,v.z*.2);
-     const vein=Math.pow(Math.abs(Math.sin(t*Math.PI*18)),24)*.12;
+     // 9 veins (6 on phone) across the 22 columns: the old 18 veins at power 24 could not be represented by 22
+     // vertices and baked a moire crosshatch into the vertex colours (visible as shimmer on phone under FXAA).
+     const vein=Math.pow(Math.abs(Math.sin(t*Math.PI*(high?9:6))),10)*.12;
      const sag=Math.sin(Math.PI*r)*Math.sin(Math.PI*t);
      col.push(.64+sag*.24-vein,.61+sag*.20-vein,.56+sag*.14-vein);
      if(i<nu&&j<nv){
@@ -611,7 +634,8 @@ transformed.y += sin(position.x * 1.4 - uTime * 9.0) * 0.04 * smoothstep(3.0, 10
   flex.value=pose.tip;
   for(let i=0;i<2;i++){
    const side=i===0?-1:1,input=i?r:l;
-   wings[i].rotation.z=side*(pose.sweep*0.6+input*0.09);
+   // +0.14 rad (8 deg) rest lift so the leading edge crosses the rider frame at 35-45% height like the references.
+   wings[i].rotation.z=side*(pose.sweep*0.6+input*0.09+0.14);
    wings[i].rotation.y=-side*pose.fold;
   }
   // Follow-through chain (head leads, neck follows, tail lags), then sway on top.

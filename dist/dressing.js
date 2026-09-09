@@ -38,7 +38,7 @@ function makePuffTexture(noiseImage){
 }
 
 // createDressing({scene, renderer, sunColor, sunDirection}) -> {update(time, flight), reset(), dispose()}
-export function createDressing({scene,renderer,sunColor=new THREE.Color(0xffd7a8),sunDirection=new THREE.Vector3(-.18,.40,-.90).normalize()}){
+export function createDressing({scene,renderer,sunColor=new THREE.Color(0xffd7a8),sunDirection=new THREE.Vector3(-.18,.21,-.90).normalize()}){
  const tier=TIER;// read at call time
  const high=tier==='high';
  const time={value:0};
@@ -69,25 +69,33 @@ export function createDressing({scene,renderer,sunColor=new THREE.Color(0xffd7a8
   fragmentShader:`varying vec2 vUv;varying float vSunlit;uniform float uTime;uniform sampler2D uNoise;uniform vec3 uSun;
    #include <fog_pars_fragment>
    void main(){
-    // Two streak layers fall at different speeds; the sheet frays at its side edges and thickens toward the bottom.
-    // Noise stretched strongly along the fall direction so it reads as long thin streaks, not blobs; two speeds.
-    float n1=texture2D(uNoise,vec2(vUv.x*5.,vUv.y*.9+uTime*.5)).r;
-    float n2=texture2D(uNoise,vec2(vUv.x*11.+.3,vUv.y*2.2+uTime*1.1)).r;
-    float n3=texture2D(uNoise,vec2(vUv.x*1.3,vUv.y*.35+uTime*.2)).r;
-    float streak=smoothstep(.3,.75,n1*.55+n2*.3+n3*.15);
+    // Three streak octaves (18 / 37 / 70 columns across the sheet) at different speeds plus a slow wide swell. The old
+    // single 5-column sample with a hard smoothstep(.3,.75) drew 4-6 white bars (a barcode); a soft knee at .45-.65
+    // over the sum keeps every strand under ~3% of the sheet width.
+    // Vertical stretch 3-9 (was up to 60 m per noise unit): each strand now breaks up every ~8-20 m down the sheet
+    // instead of running the full height as one line of a comb.
+    float n1=texture2D(uNoise,vec2(vUv.x*18.,vUv.y*3.+uTime*.6)).r;
+    float n2=texture2D(uNoise,vec2(vUv.x*37.+.3,vUv.y*6.+uTime*1.2)).r;
+    float n3=texture2D(uNoise,vec2(vUv.x*70.+.7,vUv.y*9.+uTime*1.8)).r;
+    float n4=texture2D(uNoise,vec2(vUv.x*1.3,vUv.y*.35+uTime*.2)).r;
+    float streak=smoothstep(.42,.62,n1*.5+n2*.3+n3*.1+n4*.1);
     float edge=smoothstep(0.,.25,vUv.x)*smoothstep(1.,.75,vUv.x);
-    float body=mix(.55,1.,1.-vUv.y)*smoothstep(1.,.86,vUv.y);// fade the top edge so the lip never reads as a cut line
-    float alpha=streak*edge*body;
+    // Alpha 0 at the lip, full by 25% down, fading again over the bottom 15% into the foot spray.
+    float body=smoothstep(1.,.75,vUv.y)*smoothstep(0.,.15,vUv.y);
+    // A faint continuous veil (n4) sits behind the strands so the sheet reads as one falling mass, not separate lines.
+    float alpha=(streak*.75+n4*.35)*edge*body;
     // Peak 1.05 linear (under the bloom threshold); a sun-facing core may reach 1.5 so only the lit sheet glows.
     vec3 col=mix(vec3(.62,.72,.78),vec3(1.05,1.02,.98),streak)*mix(vec3(1.),uSun,.35);
     col*=1.+.43*vSunlit*streak;
-    gl_FragColor=vec4(col,alpha*.92);
+    gl_FragColor=vec4(col,alpha*.6);
     #include <fog_fragment>
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
    }`
  });
  const sprayMat=new THREE.SpriteMaterial({map:puff,color:0xc4ced2,transparent:true,opacity:.28,depthWrite:false,fog:true});
+ // Second, wider and denser mist puff at the foot so the sheet dissolves into spray instead of ending on a line.
+ const spray2Mat=new THREE.SpriteMaterial({map:puff,color:0xc4ced2,transparent:true,opacity:.4,depthWrite:false,fog:true});
  const shaftMat=new THREE.SpriteMaterial({map:puff,color:0xd8dcd6,transparent:true,opacity:.12,depthWrite:false,fog:true});
  const fallCount=high?6:4,falls=[];
  const fallGeo=new THREE.PlaneGeometry(1,1,1,8);
@@ -123,13 +131,19 @@ export function createDressing({scene,renderer,sunColor=new THREE.Color(0xffd7a8
   // Spray shaft: tall thin sprite standing over the base to catch the sun.
   f.shaft.position.set(footX-side*3,12+base,-d+2);
   f.shaft.scale.set(8,30,1);
+  // Wide foot spray (placed after the shaft: on phone the same sprite object serves as both, and this placement wins).
+  f.spray2.position.set(footX-side*5,1+base,-d+1);
+  f.spray2.scale.set(sprayW*1.4,sprayW*.6,1);
  }
  for(let i=0;i<fallCount;i++){
   const sheet=new THREE.Mesh(fallGeo,fallMat),sheet2=new THREE.Mesh(fallGeo,fallMat);
   const spray=new THREE.Sprite(sprayMat),shaft=new THREE.Sprite(shaftMat);
-  shaft.visible=high;// phone tier saves the draw call; the base spray still marks the fall
+  // Phone keeps the draw-call budget (<= 110): the tall spray shaft is a high-only sprite, so on phone that same
+  // sprite object is re-used as the wide foot spray instead of adding a draw call.
+  const spray2=high?new THREE.Sprite(spray2Mat):shaft;
+  if(high)scene.add(spray2);else{shaft.material=spray2Mat;spray.visible=false;}// phone: the wide puff alone marks the foot (same call count as before)
   scene.add(sheet,sheet2,spray,shaft);
-  const f={sheet,sheet2,spray,shaft};placeFall(f,i);falls.push(f);
+  const f={sheet,sheet2,spray,shaft,spray2};placeFall(f,i);falls.push(f);
  }
  // --- Mist banks -------------------------------------------------------------------------------------------------
  // Mist banks: wide, LOW and thin, hugging the water like the reference; never closer than 90 m ahead of the rider
@@ -193,7 +207,7 @@ export function createDressing({scene,renderer,sunColor=new THREE.Color(0xffd7a8
   if(puffRebuilt||!img||!img.width)return;
   puffRebuilt=true;
   const next=makePuffTexture(img);
-  for(const m of[sprayMat,shaftMat,bankMat,hazeMat]){m.map=next;m.needsUpdate=true;}
+  for(const m of[sprayMat,spray2Mat,shaftMat,bankMat,hazeMat]){m.map=next;m.needsUpdate=true;}
   disposables.push(next);
  }
  function update(t,flight){
@@ -220,13 +234,13 @@ export function createDressing({scene,renderer,sunColor=new THREE.Color(0xffd7a8
   };
  }
  function dispose(){
-  for(const f of falls)scene.remove(f.sheet,f.sheet2,f.spray,f.shaft);
+  for(const f of falls)scene.remove(f.sheet,f.sheet2,f.spray,f.shaft,f.spray2);
   for(const b of banks)scene.remove(b.sprite);
   for(const h of hazes)scene.remove(h);
   scene.remove(birds);
   fallGeo.dispose();birdGeo.dispose();
-  for(const m of[fallMat,sprayMat,shaftMat,bankMat,hazeMat,birdMat])m.dispose();
+  for(const m of[fallMat,sprayMat,spray2Mat,shaftMat,bankMat,hazeMat,birdMat])m.dispose();
   for(const t of disposables)t.dispose();
  }
- return {update,reset,dispose,sources,falls,banks,hazes,birds,materials:{fallMat,sprayMat,shaftMat,bankMat,hazeMat,birdMat}};
+ return {update,reset,dispose,sources,falls,banks,hazes,birds,materials:{fallMat,sprayMat,spray2Mat,shaftMat,bankMat,hazeMat,birdMat}};
 }

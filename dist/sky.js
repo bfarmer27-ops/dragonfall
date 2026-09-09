@@ -8,10 +8,13 @@ import {Lensflare, LensflareElement} from 'three/addons/objects/Lensflare.js';
 import {TIER, BUDGET} from './quality.js';
 
 // ---------------------------------------------------------------------------------------------
-// Sun. Unit vector FROM the scene TOWARD the sun (ahead, slightly left, 23.6 degrees up). Fixed for
-// this build so the fog GLSL can bake it as a literal.
+// Sun. Unit vector FROM the scene TOWARD the sun (ahead, slightly left, 12.9 degrees up). Fixed for
+// this build so the fog GLSL can bake it as a literal. Lowered from 23.6 degrees on 2026-09-09: the rider
+// eye tilts down ~11.5 degrees and the 16:9 frame's top edge sits at about +19.5 degrees, so at 23.6 the disc,
+// its bloom halo and the sun-shaft pass could never appear in level flight. 12.9 degrees is still above the
+// HDRI's brown hills (9 degrees) and inside every frame shape (portrait top edge ~ +25 degrees).
 // ---------------------------------------------------------------------------------------------
-export const SUN_DIRECTION = Object.freeze(new THREE.Vector3(-0.18, 0.40, -0.90).normalize());
+export const SUN_DIRECTION = Object.freeze(new THREE.Vector3(-0.18, 0.21, -0.90).normalize());
 export const SUN_COLOR_HEX = 0xffd7a8;
 export const WORLD_SLOPE = 0.04;
 
@@ -177,7 +180,7 @@ function skyFragment(octaves) {
   // Domain warp: bends the noise into rounded, billowing cumulus lobes instead of a flat mottle.
   p += 0.35 * vec2(fbm3(p * 1.3 + vec2(3.1, 5.7)), fbm3(p * 1.3 + vec2(9.2, 1.3))) - 0.175;
   #endif
-  // The sun sits 23.6 degrees up and 11 degrees left of straight ahead: up and slightly left in
+  // The sun sits 12.9 degrees up and 11 degrees left of straight ahead: up and slightly left in
   // (az, el) space. Sampling the same noise a small step toward the sun gives a self-shadowing term.
   vec2 sunStep = vec2(-0.035, 0.07);
   float shape = fbm3(p);                                   // big lobes
@@ -191,7 +194,7 @@ function skyFragment(octaves) {
   // noise only spreads about +/-0.1, so a wide ramp gave one smooth gradient instead of edges.
   float cover = 0.55 + 0.20 * (1.0 - smoothstep(0.02, 0.60, d.y));
   float dens = smoothstep(1.0 - cover, 1.0 - cover + 0.14, n);
-  dens *= smoothstep(-0.01, 0.05, d.y);                               // no cloud under the horizon
+  dens *= smoothstep(-0.02, 0.02, d.y);                               // no cloud under the horizon (band starts at 0 deg so towers show above the rim)
   // Lighting from the full noise (lobes + billows): every bump has a sunlit face and a shadowed face.
   float lit = clamp((n - nSun) * 14.0 + 0.30, 0.0, 1.0);
   lit *= lit;
@@ -296,15 +299,30 @@ function makeFlareTexture(size, inner, outer) {
 // kiara_8_sunset_2k: the sun texels sit at 65504 (the half-float ceiling, 452 texels over 50). Fed raw
 // into the PMREM they come out as blocky white squares on chrome and turn flat water into a white mirror.
 // The DirectionalLight is the sun; the environment only needs a soft hot spot on the sun side.
-function clampedHdrCopy(t, maxValue) {
+// skyBoost: the sky half of kiara_8_sunset averages only 0.083 radiance (measured on the 1k file; the sunlit ground
+// half is 0.44), so the image-based light carried almost no sky light and every face turned away from the sun (wings,
+// neck top, fists, the shaded wall) came out black. The copy that feeds the PMREM has its sky half multiplied so the
+// mean sky radiance is ~0.5 next to the 3.2 sun, i.e. the bright overcast sky of the reference frames. The visible
+// dome still samples the raw file, so the picture of the sky does not change.
+function clampedHdrCopy(t, maxValue, skyBoost = 1) {
  const src = t.image.data;
  const dst = src.slice();
- if (src instanceof Uint16Array) {
-  // Positive half floats sort the same way as their uint16 bit patterns, so one compare per channel.
-  const lim = THREE.DataUtils.toHalfFloat(maxValue);
-  for (let i = 0; i < dst.length; i++) if ((dst[i] & 0x8000) === 0 && dst[i] > lim) dst[i] = lim;
- } else {
-  for (let i = 0; i < dst.length; i++) if (dst[i] > maxValue) dst[i] = maxValue;
+ const {width, height} = t.image;
+ const stride = dst.length / (width * height);
+ const isHalf = src instanceof Uint16Array;
+ const smooth = (a, b, x) => { const u = Math.min(1, Math.max(0, (x - a) / (b - a))); return u * u * (3 - 2 * u); };
+ for (let row = 0; row < height; row++) {
+  const v = t.flipY ? 1 - (row + 0.5) / height : (row + 0.5) / height;
+  const elevation = (v - 0.5) * Math.PI;
+  const boost = 1 + (skyBoost - 1) * smooth(-0.05, 0.15, elevation);
+  const from = row * width * stride, to = from + width * stride;
+  for (let i = from; i < to; i++) {
+   if (stride === 4 && (i - from) % 4 === 3) continue;   // alpha channel untouched
+   let value = isHalf ? THREE.DataUtils.fromHalfFloat(dst[i]) : dst[i];
+   if (value > maxValue) value = maxValue;
+   value *= boost;
+   dst[i] = isHalf ? THREE.DataUtils.toHalfFloat(value) : value;
+  }
  }
  const c = new THREE.DataTexture(dst, t.image.width, t.image.height, t.format, t.type);
  c.mapping = THREE.EquirectangularReflectionMapping;
@@ -357,7 +375,11 @@ export function createSky({renderer, scene}) {
  sunLight.shadow.camera.updateProjectionMatrix();
  sunLight.position.copy(sunDirection).multiplyScalar(120);
  scene.add(sunLight, sunLight.target);
- const hemi = new THREE.HemisphereLight(0x6f8aa0, 0x2a2118, 0.25);
+ // Fill 0.45 (contract said 0.25): with the sun ahead, the rider sees only unlit back faces of the neck, fists and
+ // pommel; at 0.25 they measured 1-13/255 in the game frame against 21-58 in the reference frames.
+ // 1.2: three divides this light by pi in the Lambert term, so 1.2 x the sky colour (~0.25) is only ~0.1 of reflected
+ // sky light on an up-facing face; the HDRI's own sky averages 0.083 radiance (measured), i.e. almost no sky light.
+ const hemi = new THREE.HemisphereLight(0x6f8aa0, 0x2a2118, 0.6);
  scene.add(hemi);
  renderer.shadowMap.enabled = true;
  renderer.shadowMap.type = tier === 'phone' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
@@ -434,7 +456,9 @@ export function createSky({renderer, scene}) {
    try {
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
-    const clamped = clampedHdrCopy(t, 32);
+    // Clamp at 400, not 32: at 32 the clearcoat highlight the HDRI sun paints along the neck top (the one thing that
+    // lit the neck on dev/dragon.html, which PMREMs the raw file) was gone. water.js caps its own radiance at 4.
+    const clamped = clampedHdrCopy(t, 400, 2.5);   // 2.5x: mean sky ~0.21; at 6x the frame washed out (neck 114, fists 123-149 vs reference 58 / 35)
     scene.environment = pmrem.fromEquirectangular(clamped).texture;
     pmrem.dispose();
     clamped.dispose();
