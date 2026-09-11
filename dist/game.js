@@ -12,7 +12,15 @@ import {createSky} from './sky.js';
 import {createTerrain, terrainHeight, createArchGeometry, createBoulderGeometry, createRockMaterial, worldSlope} from './terrain.js';
 import {createWater} from './water.js';
 import {createDressing} from './dressing.js';
-import {createDragon, mergeRigid} from './dragon.js';
+import {createDragon as createClassicDragon, mergeRigid} from './dragon.js';
+import {createDragon as createDemonDragon, saveDragonStyle} from './dragon-gltf.js';
+// Dragon body: 'demon' = the downloaded Demon Dragon model (default; 40k triangles, real wing-flap clip),
+// 'classic' = built from code (Settings > Dragon). Saved in localStorage 'dragonfall-dragon'.
+let dragonStyle = 'demon';
+try { if (localStorage.getItem('dragonfall-dragon') === 'classic') dragonStyle = 'classic'; } catch {}
+const dragonParam = new URLSearchParams(location.search).get('dragon'); // one-load test override, like ?tier
+if (dragonParam === 'classic' || dragonParam === 'demon') dragonStyle = dragonParam;
+const createDragon = dragonStyle === 'demon' ? (r, o) => createDemonDragon(r, o) : createClassicDragon;
 import {createRider} from './rider.js';
 import {wingbeatPose} from './wingbeat.js';
 // flight.js is imported without a cache-buster so terrain.js and dressing.js (which import './flight.js')
@@ -455,6 +463,7 @@ function syncSettings() {
  $('graphics').value = readTierSetting();
  $('graphics-description').textContent = 'Auto picks Phone on handhelds. Now running: ' + (tier === 'high' ? 'High (film)' : 'Phone (fast)') + '. Changing it restarts the game.';
  $('camera-mode').value = cameraMode;
+ $('dragon-style').value = dragonStyle;
  $('speed-slider').value = String(getSpeedMultiplier());
  $('speed-value').value = getSpeedMultiplier().toFixed(2) + 'x';
  $('fire-word').value = readFireWord();
@@ -489,6 +498,10 @@ $('graphics').addEventListener('change', () => {
  setTier($('graphics').value);
  toast('RESTARTING WITH NEW GRAPHICS');
  setTimeout(() => location.reload(), 350);
+});
+$('dragon-style').addEventListener('change', () => {
+ saveDragonStyle($('dragon-style').value);
+ location.reload();
 });
 $('camera-mode').addEventListener('change', () => {
  setCameraMode($('camera-mode').value);
