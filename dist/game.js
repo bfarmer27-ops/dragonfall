@@ -1,5 +1,6 @@
 // Dragonfall game loop: wires the film-render modules (render, sky, terrain, water, dressing, dragon, rider)
-// around the unchanged flight physics, controls, gates, obstacles, collisions, HUD, audio and settings.
+// around the flight physics, controls, gates, obstacles, collisions, HUD and settings, plus Ryan's 2026-09-09
+// features: audio.js (all sound), speech.js (voice fire word), fireball.js (fireballs + kills), net.js (friends).
 //
 // sky.js MUST be the first import: at import time it replaces three's fog shader chunks with the analytic
 // height fog, and every material compiled afterwards picks it up with no plumbing (SHARED CONTRACTS v1, 4).
@@ -16,9 +17,14 @@ import {createRider} from './rider.js';
 import {wingbeatPose} from './wingbeat.js';
 // flight.js is imported without a cache-buster so terrain.js and dressing.js (which import './flight.js')
 // share this single module instance with game.js.
-import {clamp, damp, centerAt, newFlight, stepFlight, getSpeedMultiplier, PHYSICS_STEP} from './flight.js';
+import {clamp, damp, centerAt, newFlight, stepFlight, getSpeedMultiplier, setSpeedMultiplier, applyVerticalGain, LANDSCAPE_VERTICAL_GAIN, PHYSICS_STEP} from './flight.js';
 import {readInvertSetting, saveInvertSetting, invertVerticalControls, readControlMode, saveControlMode} from './control-settings.js?v=7';
 import {createTilt} from './tilt.js';
+// Ryan's 2026-09-09 features (spec/features-integration.md): sound, voice fire word, fireballs, friends over WebRTC.
+import {createAudio} from './audio.js';
+import {createSpeech, readFireWord, saveFireWord, STICKY_STATUSES} from './speech.js';
+import {createFireballs} from './fireball.js';
+import {createNet} from './net.js';
 
 const $ = id => document.getElementById(id);
 const TAU = Math.PI * 2;
@@ -61,7 +67,13 @@ rs.setSize(viewportWidth, viewportHeight);
 // Game state
 // ---------------------------------------------------------------------------------------------
 let flapPhase = 0;
-let flight = newFlight(), mode = 'intro', time = 0, lastTime = performance.now(), toastTimer = 0, uiTime = 0, best = 0;
+// newFlight() plus the counter flight.js does not know about: kills (boulders shattered + riders hit). It rides in the
+// multiplayer state packet, so every rider can draw the same scoreboard.
+function freshFlight() { const f = newFlight(); f.kills = 0; return f; }
+let flight = freshFlight(), mode = 'intro', time = 0, lastTime = performance.now(), toastTimer = 0, uiTime = 0, best = 0;
+let wasDiving = false;           // nose-dive edge detector: one 'NOSE DIVE' toast per dive
+let respawnAt = 0;               // multiplayer: time (s) at which a shot-down rider gets full shields back; 0 = flying
+const lastControls = [0, 0];     // the final wing command of the last frame (?debug=1 tests read it)
 try { best = Number(localStorage.getItem('dragonfall-best-v1')) || 0; } catch {}
 $('intro-best').textContent = Math.floor(best).toLocaleString() + ' m';
 window.__frames = 0;
@@ -196,6 +208,9 @@ for (let i = 0; i < 3; i++) {
 let controlMode = readControlMode(), invertVertical = readInvertSetting(controlMode);
 const tilt = createTilt();
 const pointers = {left: null, right: null}, inputs = {left: 0, right: 0}, keys = new Set();
+// The RAW thumb positions of the last controls() call (+1 = slid up, -1 = slid down toward the rider), before the
+// landscape gain and the invert setting: the rider's fists follow these, so a pulled thumb pulls that side's rein.
+const reins = {left: 0, right: 0};
 function updatePad(side, v, active) {
  const el = $(side + '-wing');
  el.classList.toggle('active', active);
@@ -242,6 +257,14 @@ function pointerEnd(e) {
 for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) $('game').addEventListener(event, pointerEnd);
 addEventListener('keydown', e => {
  if ($('settings-dialog').open) return;
+ // F breathes fire (same as the FIRE button and the voice word); held keys do not auto-repeat it. Ctrl/Cmd/Alt+F
+ // stay with the browser (find), and the key is only claimed while flying so the intro page keeps its shortcuts.
+ if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if (mode !== 'playing') return;
+  e.preventDefault();
+  if (!e.repeat) fire('key');
+  return;
+ }
  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Escape', 'w', 's', 'W', 'S', 'i', 'k', 'I', 'K'].includes(e.key)) {
   e.preventDefault();
   if (e.repeat && [' ', 'Escape'].includes(e.key)) return;
@@ -262,6 +285,8 @@ function controls() {
   const l = clamp(fl || 0, -1, 1), r = clamp(fr || 0, -1, 1);
   updatePad('left', l, l !== 0);
   updatePad('right', r, r !== 0);
+  reins.left = l;
+  reins.right = r;
   return [l, r];
  }
  const t = controlMode === 'tilt' ? tilt.read() : {pitch: 0, bank: 0};
@@ -270,10 +295,15 @@ function controls() {
  const arrowPitch = ((keys.has('arrowup') ? 1 : 0) - (keys.has('arrowdown') ? 1 : 0)) * (invertVertical ? -1 : 1);
  const pitch = t.pitch + arrowPitch;
  const turn = t.bank + (keys.has('arrowleft') ? 1 : 0) - (keys.has('arrowright') ? 1 : 0);
- const l = clamp(inputs.left + (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0) + pitch - turn, -1, 1);
- const r = clamp(inputs.right + (keys.has('i') ? 1 : 0) - (keys.has('k') ? 1 : 0) + pitch + turn, -1, 1);
+ let l = clamp(inputs.left + (keys.has('w') ? 1 : 0) - (keys.has('s') ? 1 : 0) + pitch - turn, -1, 1);
+ let r = clamp(inputs.right + (keys.has('i') ? 1 : 0) - (keys.has('k') ? 1 : 0) + pitch + turn, -1, 1);
  updatePad('left', l, !!pointers.left || l !== 0);
  updatePad('right', r, !!pointers.right || r !== 0);
+ reins.left = l;
+ reins.right = r;
+ // Landscape phones have little vertical thumb travel: the shared climb/dive part of the two thumbs is amplified
+ // 1.5x there (the difference between the thumbs, the bank, is untouched). Portrait and desktop-portrait stay 1x.
+ if (viewportWidth > viewportHeight) [l, r] = applyVerticalGain(l, r, LANDSCAPE_VERTICAL_GAIN);
  return invertVerticalControls(l, r, invertVertical);
 }
 
@@ -300,7 +330,7 @@ async function start() {
  if (!await prepareControls()) return;
  resetInputs();
  flapPhase = 0;
- flight = newFlight();
+ flight = freshFlight();
  terrain.reset();
  dressing.reset();
  gates.forEach((g, i) => setGate(g, i));
@@ -315,11 +345,18 @@ async function start() {
  if (cameraMode === 'chase') positionCamera(1, true);
  placeWingPads();
  toast(controlMode === 'tilt' ? 'TILT TO STEER · LIFT TOP EDGE TO CLIMB' : 'THUMBS ON WINGS · FIND YOUR FLOW');
- if (audioEnabled) startAudio();
+ for (const b of fireballs.live.slice()) fireballs.burst(b, 'reset');   // no fireballs carry over from the last flight
+ if (net.status.mode === 'offline') clearRiders(true);                  // outside a room no remote dragon may linger
+ wasDiving = false;
+ respawnAt = 0;
+ lastFireAt = -10;
+ startVoice();          // listen for the fire word (only if Voice fire is on and the browser supports it)
+ joinPendingRoom();     // ?room=CODE in the address joins the friend's room on the first TAKE FLIGHT
 }
 function pause() {
  if (mode !== 'playing') return;
  mode = 'paused';
+ saveBest();   // a room flight never reaches gameOver(), so the best is also saved here, on shot-down and on leave
  resetInputs();
  $('modal').hidden = false;
  $('modal-eyebrow').textContent = 'TAKE A BREATH';
@@ -327,7 +364,8 @@ function pause() {
  $('modal-message').textContent = 'The canyon will wait.';
  $('run-stats').hidden = true;
  $('resume').innerHTML = 'RESUME FLIGHT <span>↗</span>';
- setAudioLevel(0);
+ audio.update({playing: false});   // beds fade to a whisper while paused
+ speech.stop();
 }
 async function resume() {
  if (mode === 'over') { start(); return; }
@@ -336,7 +374,7 @@ async function resume() {
  resetInputs();
  $('modal').hidden = true;
  lastTime = performance.now();
- if (audioEnabled) startAudio();
+ startVoice();
 }
 function gameOver() {
  mode = 'over';
@@ -349,8 +387,10 @@ function gameOver() {
  $('run-stats').hidden = false;
  $('final-distance').textContent = Math.floor(flight.distance).toLocaleString();
  $('final-gates').textContent = flight.gates;
+ $('final-kills').textContent = flight.kills;
  $('resume').innerHTML = 'FLY AGAIN <span>↗</span>';
- setAudioLevel(0.015);
+ audio.update({playing: false});
+ speech.stop();
 }
 function hit(reason) {
  if (flight.invulnerable > 0) return;
@@ -361,11 +401,15 @@ function hit(reason) {
  // Hurt feedback: red skin pulse on the dragon, camera shake on the rider, the red screen flash.
  model.setHurt(0.25);
  rider.shake(0.4);
- $('flash').style.opacity = '1';
- setTimeout(() => $('flash').style.opacity = '0', 220);
+ flashScreen('hit');
  if (navigator.vibrate) navigator.vibrate(70);
- if (audioEnabled) chime(95, 0.23);
- if (flight.health <= 0) { gameOver(); return; }
+ if (reason.startsWith('FIREBALL')) audio.hitPlayer(); else audio.hitWall();
+ if (flight.health <= 0) {
+  // In a room the flight goes on: 3 s of untouchable gliding, then full shields, so friends stay together.
+  if (net.status.mode !== 'offline') { shotDown(); return; }
+  gameOver();
+  return;
+ }
  const altBefore = flight.alt, xBefore = flight.x;
  flight.alt = Math.max(flight.alt + 9, 18);
  flight.x = THREE.MathUtils.lerp(flight.x, centerAt(flight.distance), 0.48);
@@ -411,6 +455,13 @@ function syncSettings() {
  $('graphics').value = readTierSetting();
  $('graphics-description').textContent = 'Auto picks Phone on handhelds. Now running: ' + (tier === 'high' ? 'High (film)' : 'Phone (fast)') + '. Changing it restarts the game.';
  $('camera-mode').value = cameraMode;
+ $('speed-slider').value = String(getSpeedMultiplier());
+ $('speed-value').value = getSpeedMultiplier().toFixed(2) + 'x';
+ $('fire-word').value = readFireWord();
+ $('voice-fire').checked = voiceFireEnabled;
+ showVoiceStatus(speech.state);
+ $('player-name').value = net.name;
+ showNetStatus(net.status);
 }
 $('control-mode').addEventListener('change', () => {
  controlMode = $('control-mode').value;
@@ -477,60 +528,367 @@ $('fullscreen').onclick = async () => {
 };
 
 // ---------------------------------------------------------------------------------------------
-// Audio (wind + chimes) - unchanged
+// Audio (audio.js): wind, river, waterfall and cloud beds plus one-shot flap / hit / bell / fire / burst sounds.
+// Nothing plays until the speaker button is tapped (browsers only start audio after a tap).
 // ---------------------------------------------------------------------------------------------
-let audioEnabled = false, audioContext, windGain, windFilter;
-function startAudio() {
- try {
-  if (!audioContext) {
-   audioContext = new (window.AudioContext || window.webkitAudioContext)();
-   const buffer = audioContext.createBuffer(1, audioContext.sampleRate * 3, audioContext.sampleRate), data = buffer.getChannelData(0);
-   let p = 0;
-   for (let i = 0; i < data.length; i++) { p = (p + Math.random() * 0.04 - 0.02) / 1.02; data[i] = p * 5; }
-   const src = audioContext.createBufferSource();
-   src.buffer = buffer;
-   src.loop = true;
-   windFilter = audioContext.createBiquadFilter();
-   windFilter.type = 'lowpass';
-   windFilter.frequency.value = 600;
-   windGain = audioContext.createGain();
-   windGain.gain.value = 0;
-   src.connect(windFilter).connect(windGain).connect(audioContext.destination);
-   src.start();
+const audio = createAudio();
+window.__audio = audio;   // headless tests read audio.enabled
+$('sound').onclick = async () => {
+ const on = await audio.toggle();
+ $('sound').setAttribute('aria-label', on ? 'Mute sound' : 'Enable sound');
+ $('sound-waves').setAttribute('d', on ? 'M15 8c3 2 3 6 0 8m3-11c5 4 5 10 0 14' : 'm16 9 6 6m0-6-6 6');
+};
+// What the rider is near, for the beds: closeness (0..1) to the nearest waterfall foot and whether the dragon is
+// inside a mist bank. dressing.js owns both lists (6 falls, 12 banks): cheap, and only read on the ~8 Hz UI tick.
+const soundScene = {falls: 0, cloud: 0, inCloud: false};
+const _dragonPos = new THREE.Vector3();
+function readSoundScene() {
+ _dragonPos.set(flight.x, flight.alt - flight.distance * worldSlope, -flight.distance);
+ let falls = 0;
+ for (const f of dressing.falls) {
+  // Distance to the nearest point of the sheet's foot line: the roar comes from the whole width, not one point.
+  const dx = Math.max(0, Math.abs(_dragonPos.x - f.x) - f.width * 0.5), dy = _dragonPos.y - f.y, dz = _dragonPos.z + f.d;
+  falls = Math.max(falls, 1 - Math.min(1, Math.sqrt(dx * dx + dy * dy + dz * dz) / 140));
+ }
+ let inCloud = false;
+ for (const b of dressing.banks) {
+  const sp = b.sprite;
+  if (sp.visible && Math.abs(_dragonPos.x - sp.position.x) < sp.scale.x * 0.5 && Math.abs(_dragonPos.y - sp.position.y) < sp.scale.y * 0.5 && Math.abs(_dragonPos.z - sp.position.z) < 14) { inCloud = true; break; }
+ }
+ if (inCloud && !soundScene.inCloud) audio.cloudEnter();   // a soft swell on the way in
+ soundScene.inCloud = inCloud;
+ soundScene.falls = falls;
+ // A nose dive adds its own wind roar (0.6 on the cloud-rush bed) on top of any mist bank.
+ soundScene.cloud = Math.max(inCloud ? 1 : 0, flight.noseDive ? 0.6 : 0);
+}
+function updateAudio() {
+ if (!audio.enabled) return;
+ readSoundScene();
+ audio.update({speed: flight.speed / getSpeedMultiplier(), alt: flight.alt, falls: soundScene.falls, cloud: soundScene.cloud, playing: mode === 'playing'});
+}
+// The full-screen flash: red for a hit, orange for a fireball leaving the mouth.
+let flashTimer = 0;
+function flashScreen(kind) {
+ const el = $('flash');
+ el.classList.toggle('fire', kind === 'fire');
+ el.style.opacity = '1';
+ clearTimeout(flashTimer);
+ flashTimer = setTimeout(() => { el.style.opacity = '0'; }, 220);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fireballs (fireball.js): leave the dragon's mouth along its heading at flight speed + 110 m/s. Triggers: the FIRE
+// button, the F key, the voice word. A ball that reaches a boulder shatters it (the boulder respawns beyond the
+// farthest one) and scores a KILL; one passing within 7 m of a friend's dragon sends them a 'hit' and scores too.
+// Phone tier keeps fewer balls in the air (fireball.js also halves its particles and skips the point light there).
+// ---------------------------------------------------------------------------------------------
+const FIRE_COOLDOWN = 0.9, FIREBALL_EXTRA_SPEED = 110, FIREBALL_RANGE = 520;
+let lastFireAt = -10;
+const fireballs = createFireballs({scene, maxBalls: tier === 'phone' ? 3 : 6, onExplode: (pos) => {
+ // Louder the closer the burst is to the rider: 1 = right beside you, 0 = 120 m or more away.
+ audio.explosion(1 - Math.min(1, pos.distanceTo(dragon.position) / 120));
+}});
+const _mouth = new THREE.Vector3(), _heading = new THREE.Vector3();
+function fire(source = 'button') {
+ if (mode !== 'playing' || flight.health <= 0) return false;
+ if (time - lastFireAt < FIRE_COOLDOWN) return false;
+ lastFireAt = time;
+ dragon.updateMatrixWorld(true);
+ model.headAnchor.getWorldPosition(_mouth);
+ _heading.set(0, 0, -1).applyQuaternion(dragon.quaternion);
+ _mouth.addScaledVector(_heading, 2.2);   // just past the jaws so the ball never starts inside the head
+ const speed = flight.speed + FIREBALL_EXTRA_SPEED;
+ fireballs.fire({origin: _mouth, direction: _heading, speed, owner: 'me', range: FIREBALL_RANGE});
+ audio.fireball();
+ rider.shake(0.25);
+ flashScreen('fire');
+ if (navigator.vibrate) navigator.vibrate(25);
+ $('fire').classList.add('cooling');
+ setTimeout(() => $('fire').classList.remove('cooling'), FIRE_COOLDOWN * 1000);
+ if (source === 'voice') toast('"' + readFireWord().toUpperCase() + '" · FIRE');
+ if (net.status.mode !== 'offline') net.event('fire', {o: [+_mouth.x.toFixed(2), +_mouth.y.toFixed(2), +_mouth.z.toFixed(2)], v: [+(_heading.x * speed).toFixed(2), +(_heading.y * speed).toFixed(2), +(_heading.z * speed).toFixed(2)]});
+ return true;
+}
+function scoreKill(text) {
+ flight.kills++;
+ $('kills').textContent = flight.kills;
+ toast(text + ' · ' + flight.kills + (flight.kills === 1 ? ' KILL' : ' KILLS'));
+}
+function destroyBoulder(o) {
+ // Respawn it beyond the farthest boulder so the field ahead keeps its 240 m spacing.
+ let farthest = 0;
+ for (const other of obstacles) farthest = Math.max(farthest, other.n);
+ setObstacle(o, farthest + 1);
+ scoreKill('BOULDER SHATTERED');
+}
+// Per-ball hit test, called by fireballs.update() after every sub-step of at most 3 m along the ball's path (a swept
+// test, so a slow frame cannot jump a ball over a boulder or a rider). Returns what the ball hit or null.
+function fireballHits(pos, ball) {
+ const d = -pos.z, alt = pos.y + d * worldSlope;   // world y -> metres above the water at that distance
+ if (alt < 0) return 'water';
+ if (terrainHeight(pos.x, d) > alt) return 'rock';
+ if (ball.owner !== 'me') return null;   // a friend's ball is only a picture here: the shooter decides its hits
+ for (const o of obstacles) {
+  if (o.mesh.visible && Math.hypot(pos.x - o.x, d - o.d) < o.radius + 1 && alt < o.height) { destroyBoulder(o); return 'rock'; }
+ }
+ for (const [id, rr] of riders) {
+  if (rr.ready && rr.pos.distanceTo(pos) < 7) {
+   // The ball bursts on them here; the KILL is scored only when they answer 'hitok' (a rider inside their 3 s shield
+   // window or already shot down absorbs the ball and sends nothing, so the scoreboard never drifts).
+   net.event('hit', {target: id});
+   return 'player:' + id;
   }
-  audioContext.resume();
-  setAudioLevel(0.14);
- } catch {
-  audioEnabled = false;
+ }
+ return null;
+}
+$('fire').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); fire('button'); });
+
+// ---------------------------------------------------------------------------------------------
+// Voice fire (speech.js): listens for the fire word while flying when 'Voice fire' is on in Settings (default on).
+// Headless and desktop browsers without a microphone fall back to the FIRE button and the F key.
+// ---------------------------------------------------------------------------------------------
+let voiceFireEnabled = true;
+try { voiceFireEnabled = localStorage.getItem('dragonfall-voice-fire') !== 'false'; } catch {}
+const speech = createSpeech({onFire: () => fire('voice'), getWord: readFireWord, onStatus: showVoiceStatus});
+function showVoiceStatus(state) {
+ const word = readFireWord();
+ const denied = 'Voice: microphone denied. Allow the microphone for this site, or use the FIRE button / F key.';
+ const map = {
+  listening: 'Voice: listening for "' + word + '".',
+  starting: 'Voice: asking the browser for the microphone…',
+  idle: voiceFireEnabled ? 'Voice: starts listening for "' + word + '" when you take flight.' : 'Voice: off. The FIRE button and the F key always work.',
+  unsupported: 'Voice: this browser has no speech recognition. Use the FIRE button or the F key.',
+  'not-allowed': denied,
+  'service-not-allowed': denied,
+  'audio-capture': 'Voice: no microphone found. Use the FIRE button or the F key.',
+  network: 'Voice: the speech service is unreachable, retrying. Use the FIRE button meanwhile.',
+  'no-speech': 'Voice: listening for "' + word + '" (nothing heard yet).',
+  aborted: 'Voice: restarting.',
+ };
+ let text = map[state.status] || ('Voice: ' + state.status + '.');
+ if (state.lastHeard && state.listening) text += ' Heard: "' + state.lastHeard.trim().slice(-40) + '".';
+ $('voice-status').textContent = text;
+}
+function startVoice() {
+ if (!voiceFireEnabled || !speech.state.supported) { showVoiceStatus(speech.state); return; }
+ // The browser already refused (microphone denied / none / service blocked): asking again every take-off would only
+ // flash 'asking the browser' over the denied line. Switching Voice fire off and on (speech.stop() -> idle) asks again.
+ if (STICKY_STATUSES.includes(speech.state.status)) { showVoiceStatus(speech.state); return; }
+ speech.start();
+}
+$('speed-slider').addEventListener('input', () => {
+ const v = setSpeedMultiplier($('speed-slider').value);   // live: flight.js reads the multiplier every physics step
+ $('speed-value').value = v.toFixed(2) + 'x';
+});
+$('fire-word').addEventListener('change', () => { $('fire-word').value = saveFireWord($('fire-word').value); showVoiceStatus(speech.state); });
+$('voice-fire').addEventListener('change', () => {
+ voiceFireEnabled = $('voice-fire').checked;
+ try { localStorage.setItem('dragonfall-voice-fire', String(voiceFireEnabled)); } catch {}
+ if (!voiceFireEnabled) speech.stop();   // when switched on, the next take-off / resume starts listening
+ showVoiceStatus(speech.state);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fly with friends (net.js over PeerJS). One player hosts and gets a 4-letter code; friends join with it or open
+// the share link (?room=CODE). Every other rider is a full dragon (createDragon) with a name sprite over its head;
+// its state arrives ~12x a second and is smoothed (damp 8) so it glides instead of stepping.
+// ---------------------------------------------------------------------------------------------
+const riders = new Map();   // id -> {model, dragon, label, name, pos, target, rot, trot, phase, lastState, lastHealth, ready}
+let pendingRoom = (query.get('room') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+const net = createNet({onStatus: showNetStatus, onPlayer: onRiderChange, onEvent: onNetEvent});
+window.__net = net;   // headless tests read net.status and net.players
+function makeNameLabel(name) {
+ const c = document.createElement('canvas');
+ c.width = 256;
+ c.height = 64;
+ const g = c.getContext('2d');
+ g.font = '700 30px Manrope, Arial, sans-serif';
+ g.textAlign = 'center';
+ g.textBaseline = 'middle';
+ g.shadowColor = '#001a18';
+ g.shadowBlur = 8;
+ g.fillStyle = '#e9fff5';
+ g.fillText(String(name).slice(0, 14), 128, 32);
+ const tex = new THREE.CanvasTexture(c);
+ tex.colorSpace = THREE.SRGBColorSpace;
+ const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false}));
+ sprite.scale.set(4, 1, 1);          // dragon-local units (x1.6 in the world)
+ sprite.position.set(0, 2.4, -5.5);  // above the head (HEAD_Z is -6.6 in dragon.js)
+ return sprite;
+}
+// Fourth argument silent: true when net.js is tearing the room down because WE left (no 'X LEFT' toast then).
+function onRiderChange(kind, id, p, silent = false) {
+ if (kind === 'join') {
+  const m = createDragon(renderer);
+  m.setSun(sky.sunDirection, sky.sunColor);
+  m.dragon.visible = false;   // shown once the first state packet places it
+  const label = makeNameLabel(p.name || 'Rider');
+  m.dragon.add(label);
+  scene.add(m.dragon);
+  riders.set(id, {model: m, dragon: m.dragon, label, labelText: p.name || 'Rider', name: p.name || 'Rider', pos: new THREE.Vector3(), target: new THREE.Vector3(), rot: {p: 0, y: 0, r: 0}, trot: {p: 0, y: 0, r: 0}, phase: 0, lastState: null, lastHealth: 3, ready: false});
+  toast((p.name || 'A RIDER').toUpperCase() + ' JOINED');
+ } else if (kind === 'leave') {
+  const rr = riders.get(id);
+  if (!rr) return;
+  scene.remove(rr.dragon);
+  rr.label.material.map.dispose();
+  rr.label.material.dispose();
+  riders.delete(id);
+  if (!silent) toast(rr.name.toUpperCase() + ' LEFT');
+ }
+ showNetStatus(net.status);
+}
+// Removes every remote dragon from the scene (disposing its name sprite). Used when the room ends for any reason:
+// Leave the room, 'The host left.', a connection error, or a fresh flight outside a room.
+function clearRiders(silent = true) {
+ for (const id of [...riders.keys()]) onRiderChange('leave', id, null, silent);
+}
+function updateRiders(dt) {
+ for (const [id, rr] of riders) {
+  const p = net.players.get(id), st = p && p.state;
+  if (!st) continue;
+  if (st !== rr.lastState) {
+   rr.lastState = st;
+   rr.target.set(st.x, st.a - st.d * worldSlope, -st.d);
+   rr.trot.p = st.p;
+   rr.trot.y = st.y;
+   rr.trot.r = st.r;
+   rr.phase = st.ph;
+   rr.name = p.name;
+   // The label carries the name plus 'PAUSED' while that rider sits in the pause / Settings screen (packet pz = 1).
+   const labelText = rr.name + (st.pz ? ' · PAUSED' : '');
+   if (labelText !== rr.labelText) { rr.labelText = labelText; rr.dragon.remove(rr.label); rr.label.material.map.dispose(); rr.label.material.dispose(); rr.label = makeNameLabel(labelText); rr.dragon.add(rr.label); }
+   if (st.h < rr.lastHealth) rr.model.setHurt(0.25);   // their skin pulses red when they lose a shield
+   rr.lastHealth = st.h;
+   if (!rr.ready) { rr.ready = true; rr.pos.copy(rr.target); Object.assign(rr.rot, rr.trot); rr.dragon.visible = true; }
+  } else {
+   rr.phase += dt * TAU * 0.77;   // keep the wings beating between packets
+  }
+  const k = 1 - Math.exp(-8 * dt);
+  rr.pos.lerp(rr.target, k);
+  rr.rot.p += (rr.trot.p - rr.rot.p) * k;
+  rr.rot.y += (rr.trot.y - rr.rot.y) * k;
+  rr.rot.r += (rr.trot.r - rr.rot.r) * k;
+  const pose = wingbeatPose(rr.phase, 0, 35);
+  rr.dragon.position.copy(rr.pos);
+  rr.dragon.position.y += pose.body * 1.6;
+  rr.dragon.rotation.set(rr.rot.p, rr.rot.y, rr.rot.r, 'YXZ');
+  // Same head-leads / neck-follows / tail-lags chain as the local dragon (dragon.js update()).
+  rr.model.update(pose, {pitch: rr.rot.p, yaw: rr.rot.y, roll: rr.rot.r, speed: 35 * getSpeedMultiplier()}, 0, 0, time);
  }
 }
-function setAudioLevel(v) {
- if (windGain) windGain.gain.setTargetAtTime(audioEnabled ? v : 0, audioContext.currentTime, 0.2);
+const _remoteOrigin = new THREE.Vector3(), _remoteVel = new THREE.Vector3();
+function onNetEvent(packet) {
+ const from = riders.get(packet.id), name = (from ? from.name : 'A RIDER').toUpperCase();
+ if (packet.k === 'fire' && Array.isArray(packet.o) && Array.isArray(packet.v)) {
+  _remoteOrigin.fromArray(packet.o);
+  _remoteVel.fromArray(packet.v);
+  const speed = _remoteVel.length() || 140;
+  fireballs.fire({origin: _remoteOrigin, direction: _remoteVel.normalize(), speed, owner: packet.id, range: FIREBALL_RANGE});
+  if (_remoteOrigin.distanceTo(dragon.position) < 250) audio.fireball();
+ } else if (packet.k === 'hit' && packet.target === net.id) {
+  // Only a hit that really costs a shield is confirmed back to the shooter (hit() ignores the invulnerable window).
+  if (mode === 'playing' && flight.invulnerable <= 0) { hit('FIREBALL FROM ' + name); net.event('hitok', {shooter: packet.id}); }
+ } else if (packet.k === 'hitok' && packet.shooter === net.id) {
+  audio.hitPlayer();
+  scoreKill('HIT ' + name);
+ } else if (packet.k === 'down') {
+  toast(name + ' WAS SHOT DOWN');
+ } else if (packet.k === 'respawn') {
+  toast(name + ' IS BACK');
+ }
 }
-function chime(freq, duration) {
- if (!audioContext) return;
- const osc = audioContext.createOscillator(), g = audioContext.createGain();
- osc.type = 'sine';
- osc.frequency.setValueAtTime(freq, audioContext.currentTime);
- osc.frequency.exponentialRampToValueAtTime(freq * 1.4, audioContext.currentTime + duration);
- g.gain.setValueAtTime(0.075, audioContext.currentTime);
- g.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
- osc.connect(g).connect(audioContext.destination);
- osc.start();
- osc.stop(audioContext.currentTime + duration);
+// Shot down in a room: 3 s of untouchable gliding (no steering, no fire), then full shields where you are.
+function shotDown() {
+ flight.health = 0;
+ saveBest();
+ updateHealth();
+ flight.invulnerable = 3.5;
+ respawnAt = time + 3;
+ net.event('down', {});
+ toast('SHOT DOWN · BACK IN 3 S');
 }
-$('sound').onclick = () => {
- audioEnabled = !audioEnabled;
- if (audioEnabled) startAudio(); else setAudioLevel(0);
- $('sound').setAttribute('aria-label', audioEnabled ? 'Mute sound' : 'Enable sound');
- $('sound-waves').setAttribute('d', audioEnabled ? 'M15 8c3 2 3 6 0 8m3-11c5 4 5 10 0 14' : 'm16 9 6 6m0-6-6 6');
+function respawn() {
+ respawnAt = 0;
+ flight.health = 3;
+ flight.invulnerable = 2;
+ flight.alt = Math.max(flight.alt, 29);
+ flight.x = centerAt(flight.distance);
+ updateHealth();
+ net.event('respawn', {});
+ toast('FULL SHIELDS · FLY');
+}
+const escapeHtml = v => String(v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+function showNetStatus(st) {
+ const el = $('net-status'), others = net.players.size;
+ if (st.mode === 'offline') {
+  // Belt and braces: whatever ended the room, no remote dragon may stay in the canyon.
+  if (riders.size) clearRiders(true);
+  if (mode === 'playing' || mode === 'paused') saveBest();
+  el.innerHTML = st.error ? '<span class="net-error">' + escapeHtml(st.error) + '</span>'
+   : st.note ? escapeHtml(st.note)   // 'Could not reach the room server, trying again (2 of 3)...'
+   : "Not connected. Host a room and share the code, or enter a friend's code.";
+ } else {
+  el.innerHTML = '<span class="net-label">' + (st.mode === 'host' ? 'YOUR ROOM CODE' : 'IN ROOM') + '</span><b class="net-code">' + escapeHtml(st.code) + '</b>'
+   + '<span>' + (others === 0 ? 'Nobody else yet. ' : others + (others === 1 ? ' rider' : ' riders') + ' with you. ') + (st.mode === 'host' ? 'Friends join with the code or this link:' : '') + '</span>'
+   + (st.mode === 'host' ? '<input class="text-input net-link" readonly value="' + escapeHtml(net.shareLink()) + '" aria-label="Share link" onfocus="this.select()">' : '')
+   + (st.error ? '<span class="net-error">' + escapeHtml(st.error) + '</span>' : '');
+ }
+ $('leave-room').hidden = st.mode === 'offline';
+ updateScoreboard();
+}
+function updateScoreboard() {
+ if (net.status.mode === 'offline') { $('scoreboard').hidden = true; return; }
+ const rows = [[net.name + ' (you)', flight.kills || 0]];
+ for (const p of net.players.values()) rows.push([p.name, (p.state && p.state.k) || 0]);
+ rows.sort((a, b) => b[1] - a[1]);
+ $('scoreboard').hidden = false;
+ $('scoreboard').textContent = 'ROOM ' + net.status.code + '\n' + rows.map(([n, k]) => n + ': ' + k).join('\n');
+}
+function setNameFromInput() { if ($('player-name').value.trim()) net.setName($('player-name').value); }
+$('player-name').addEventListener('change', setNameFromInput);
+$('host-room').onclick = async () => {
+ setNameFromInput();
+ $('net-status').textContent = 'Opening a room…';
+ try {
+  await net.host();
+  $('room-code').value = net.status.code;
+ } catch (e) {
+  $('net-status').innerHTML = '<span class="net-error">Could not open a room: ' + escapeHtml((e && (e.message || e.type)) || e) + '. Check the internet connection and try again.</span>';
+ }
 };
+$('join-room').onclick = () => joinRoom($('room-code').value);
+$('leave-room').onclick = () => net.leave();
+async function joinRoom(code) {
+ code = String(code || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+ if (code.length !== 4) { $('net-status').innerHTML = '<span class="net-error">A room code is 4 letters.</span>'; return; }
+ setNameFromInput();
+ $('net-status').textContent = 'Joining room ' + code + '…';
+ toast('JOINING ROOM ' + code);
+ try {
+  await net.join(code);
+  toast('IN ROOM ' + code + ' · FLY TOGETHER');
+ } catch (e) {
+  const msg = (e && e.message) || String(e);
+  $('net-status').innerHTML = '<span class="net-error">' + escapeHtml(msg) + '</span>';
+  toast('COULD NOT JOIN ' + code);
+ }
+}
+// ?room=CODE in the address: the code is pre-filled in Settings and joined on the first TAKE FLIGHT.
+if (pendingRoom) $('room-code').value = pendingRoom;
+function joinPendingRoom() {
+ if (!pendingRoom) return;
+ const code = pendingRoom;
+ pendingRoom = '';
+ joinRoom(code);
+}
 
 // ---------------------------------------------------------------------------------------------
 // Camera rig: 'rider' (from the saddle, default) or 'chase' (behind the dragon, the old framing)
 // ---------------------------------------------------------------------------------------------
 let cameraMode = 'rider';
 try { if (localStorage.getItem('dragonfall-camera') === 'chase') cameraMode = 'chase'; } catch {}
+const NOSE_DIVE_FOV = 12;   // degrees added to the field of view (damped) while flight.noseDive is true
 if (query.get('camera') === 'chase' || query.get('camera') === 'rider') cameraMode = query.get('camera');
 const cameraWorldPos = new THREE.Vector3(), headWorldPos = new THREE.Vector3();
 function setCameraMode(next) {
@@ -596,7 +954,7 @@ function positionCamera(dt, instant = false) {
  lookTarget.lerp(target, instant ? 1 : 1 - Math.exp(-12 * dt));
  camera.up.set(-flight.roll * 0.06, 1, 0);
  camera.lookAt(lookTarget);
- const targetFov = (aspect < 0.85 ? 67 : 61) + (flight.speed / getSpeedMultiplier() - 35) * 0.11;
+ const targetFov = (aspect < 0.85 ? 67 : 61) + (flight.speed / getSpeedMultiplier() - 35) * 0.11 + (flight.noseDive ? NOSE_DIVE_FOV : 0);
  camera.fov = instant ? targetFov : damp(camera.fov, targetFov, 2, dt);
  camera.aspect = aspect;
  camera.updateProjectionMatrix();
@@ -619,7 +977,8 @@ function updateRiderCamera(dt, l, r) {
  const aspect = viewportWidth / viewportHeight;
  const mult = getSpeedMultiplier();
  rider.setSteeringLead(flight.vx / mult);
- rider.update(l, r, flight, dt);
+ // The fists get the RAW thumbs (not the inverted wing command): a thumb slid down pulls that side's rein back.
+ rider.update(reins.left, reins.right, flight, dt);
  hitOffset.x = damp(hitOffset.x, 0, 6, dt);
  hitOffset.y = damp(hitOffset.y, 0, 6, dt);
  hitOffset.z = damp(hitOffset.z, 0, 6, dt);
@@ -627,7 +986,7 @@ function updateRiderCamera(dt, l, r) {
  rider.eye.position.y += hitOffset.y;
  rider.eye.position.z = eyeBase.z + hitOffset.z;
  // 16:9 base fov 62 (was 56) so both wing leading edges cross the frame; portrait stays 74.
- const targetFov = (aspect < 0.85 ? 74 : 62) + (flight.speed / mult - 35) * 0.11 + (flight.pitch < -0.15 ? 4 : 0);
+ const targetFov = (aspect < 0.85 ? 74 : 62) + (flight.speed / mult - 35) * 0.11 + (flight.pitch < -0.15 ? 4 : 0) + (flight.noseDive ? NOSE_DIVE_FOV : 0);
  camera.fov = damp(camera.fov, targetFov, 2, dt);
  camera.aspect = aspect;
  camera.updateProjectionMatrix();
@@ -672,7 +1031,11 @@ function animateDragon(dt, l, r) {
  const prevPhase = ((flapPhase % TAU) + TAU) % TAU;
  flapPhase += dt * Math.PI * 2 * pose.frequency;
  // The start of the power stroke (phase wrapped) is the wingbeat thump the rider feels.
- if (((flapPhase % TAU) + TAU) % TAU < prevPhase) rider.beat();
+ if (((flapPhase % TAU) + TAU) % TAU < prevPhase) {
+  rider.beat();
+  // Wing flap whoosh on each downstroke: heavier when climbing, lighter when diving.
+  if (mode === 'playing') audio.flap(clamp(0.55 + (l + r) * 0.25, 0.2, 1));
+ }
  dragon.position.y += pose.body * 1.6;   // the dragon is scaled 1.6, so the bob stays proportional
  model.update(pose, flight, l, r, time);
  dragon.updateMatrixWorld(true);
@@ -703,7 +1066,7 @@ function updateWorld(dt) {
     flight.speed = Math.min(flight.speed + 4 * mult, 72 * mult);
     g.caught = true;
     toast(flight.gates % 5 === 0 ? 'BEAUTIFUL LINE · ' + flight.gates + ' GATES' : 'GATE CAUGHT +1');
-    if (audioEnabled) chime(600 + flight.gates % 5 * 90, 0.32);
+    audio.gate();
    }
   }
   if (relative < -100) setGate(g, g.n + gates.length);
@@ -744,6 +1107,7 @@ function updateUI() {
  $('speed').textContent = Math.round(flight.speed * 3.6);
  $('altitude').textContent = Math.max(0, Math.round(flight.alt));
  $('gates').textContent = flight.gates;
+ $('kills').textContent = flight.kills;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -806,7 +1170,7 @@ function updateStats(dt) {
 }
 if (showStats) statsEl.hidden = false;
 // ?debug=1 also exposes the live objects for headless inspection (never used by the game itself).
-if (debug) window.__game = {camera, rider, model, dragon, scene, rs, sky, terrain, dressing, hitOffset, positionCamera, get flight() { return flight; }, get mode() { return mode; }, get cameraMode() { return cameraMode; }, setCameraMode, hit};
+if (debug) window.__game = {camera, rider, model, dragon, scene, rs, sky, terrain, dressing, hitOffset, positionCamera, fire, fireballs, net, riders, audio, speech, obstacles, setObstacle, reins, lastControls, get flight() { return flight; }, get mode() { return mode; }, get cameraMode() { return cameraMode; }, setCameraMode, hit};
 
 // ---------------------------------------------------------------------------------------------
 // Frame loop: controls -> physics + world -> dragon -> camera -> terrain/water/dressing/sky -> UI -> render
@@ -823,11 +1187,17 @@ function frame(now) {
  let l = 0, r = 0;
  if (mode === 'playing') {
   [l, r] = controls();
+  if (respawnAt) { l = r = 0; if (time >= respawnAt) respawn(); }   // shot down: glide hands-off until the respawn
+  lastControls[0] = l;
+  lastControls[1] = r;
   const steps = Math.max(1, Math.ceil(dt / PHYSICS_STEP)), step = dt / steps;
   for (let i = 0; i < steps && mode === 'playing'; i++) {
    stepFlight(flight, l, r, step);
    updateWorld(step);
   }
+  fireballs.update(dt, fireballHits);   // moves each ball in <= 3 m sub-steps and hit-tests after each one
+  if (flight.noseDive && !wasDiving) toast('NOSE DIVE');
+  wasDiving = flight.noseDive;
  } else if (mode === 'intro') {
   const mult = getSpeedMultiplier();
   flight.distance += dt * 20 * mult;
@@ -843,6 +1213,10 @@ function frame(now) {
   if (cameraMode === 'rider') updateRiderCamera(dt, l, r);
   else positionCamera(dt);
  }
+ // Presence goes out in every mode (no-op offline; ~12 packets/s in a room): a paused rider, or one in Settings,
+ // keeps hovering in place for friends instead of being dropped after 6 s and re-added on resume.
+ net.update(flight, flapPhase, dt, mode !== 'playing');
+ if (riders.size) updateRiders(dt);
  terrain.update(flight.distance);
  water.update(time);
  dressing.update(time, flight);
@@ -852,11 +1226,8 @@ function frame(now) {
  if (uiTime > 0.12) {
   uiTime = 0;
   if (mode === 'playing') updateUI();
-  if (audioEnabled && mode === 'playing') {
-   const windSpeed = flight.speed / getSpeedMultiplier();
-   setAudioLevel(0.08 + windSpeed * 0.0025);
-   windFilter.frequency.setTargetAtTime(350 + windSpeed * 11, audioContext.currentTime, 0.3);
-  }
+  updateAudio();
+  if (mode === 'playing' && net.status.mode !== 'offline') updateScoreboard();
  }
  rs.render(dt);
  window.__frames++;

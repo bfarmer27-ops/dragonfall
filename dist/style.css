@@ -18,3 +18,33 @@
 .wing-pad.touched small{opacity:0;transition:opacity .4s}
 /* ?stats=1 overlay: draw calls, fps, pass count, pixel ratio for headless proof shots. */
 .stats{position:absolute;left:12px;top:150px;margin:0;padding:6px 9px;font:11px/1.4 monospace;color:#b9ffe6;background:#03121899;border-radius:6px;z-index:7;pointer-events:none;white-space:pre-wrap}
+
+
+/* ---- Ryan's 2026-09-09 features: FIRE button, kills, scoreboard, fire flash, new Settings controls ---- */
+/* FIRE: thumb-sized round button at the bottom centre, above the telemetry row; only while flying. */
+.fire-button{position:absolute;left:50%;bottom:max(64px,calc(env(safe-area-inset-bottom) + 58px));transform:translateX(-50%);width:66px;height:66px;border-radius:50%;border:1px solid #ffb07a99;background:radial-gradient(circle at 50% 35%,#ff9a3aa8,#7a2a0aa0 70%);color:#fff2e0;font-size:12px;font-weight:800;letter-spacing:2px;box-shadow:0 0 26px #ff7a2a33,inset 0 0 14px #ffc08033;opacity:0;pointer-events:none;transition:opacity .4s,transform .1s;z-index:3;touch-action:none}
+.playing .fire-button{opacity:.92;pointer-events:auto}.fire-button:active{transform:translateX(-50%) scale(.92)}.fire-button.cooling{opacity:.45}
+@media(max-height:540px) and (orientation:landscape){.fire-button{width:54px;height:54px;bottom:max(40px,calc(env(safe-area-inset-bottom) + 36px));font-size:11px}}
+.scores{display:flex;gap:18px}
+/* Fireball flash: the same overlay as the red hit flash, tinted orange for the moment the ball leaves the mouth. */
+#flash.fire{background:radial-gradient(ellipse,transparent 22%,#ff8a2a8c)}
+/* Multiplayer scoreboard under the shields: name: kills for every rider. */
+.scoreboard{position:absolute;top:130px;left:32px;font-size:12px;letter-spacing:1.2px;color:#d3efe6;text-shadow:0 1px 10px #001a18;pointer-events:none;z-index:4;white-space:pre-wrap;max-width:60%}
+@media(max-width:600px){.scoreboard{top:100px;left:22px}}
+/* Settings additions */
+.settings-section{font:400 22px 'Cormorant Garamond',Georgia,serif;letter-spacing:1px;margin:6px 0 16px;color:#cdeee2;border-top:1px solid #b4e8d826;padding-top:18px}
+.text-input{background:#172b2f;color:#fff;border:1px solid #5b7578;border-radius:8px;padding:10px;font:inherit;font-size:15px;width:44%;max-width:180px;min-width:0}
+.text-input.code{width:88px;text-transform:uppercase;letter-spacing:4px;text-align:center;font-weight:700}
+.setting-row .text-input{flex:0 0 auto;appearance:auto;-webkit-appearance:auto;height:auto;width:44%;max-width:180px;border-radius:8px;background:#172b2f;border:1px solid #5b7578;padding:10px}
+.setting-row .text-input:before{content:none}
+.range-wrap{display:flex;align-items:center;gap:10px;flex:0 0 52%}
+/* Narrow phones (390 px): the speed row stacks, label on top and the slider full width, instead of squeezing the label to 84 px and wrapping its helper text into 8 lines. */
+@media(max-width:600px){.setting-speed{flex-wrap:wrap;row-gap:10px}.setting-speed>span:first-child{flex:1 1 100%}.setting-speed .range-wrap{flex:1 1 100%}}
+.setting-row input[type=range]{appearance:auto;-webkit-appearance:auto;flex:1 1 auto;width:auto;height:auto;border:0;background:transparent;accent-color:#c4ebdc;padding:0}
+.setting-row input[type=range]:before{content:none}
+#speed-value{font-variant-numeric:tabular-nums;font-weight:700;min-width:48px;text-align:right}
+.status-line{font-size:13px;line-height:1.5;color:#b7d0cb;margin:-14px 0 20px}
+.net-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.join-wrap{display:flex;gap:8px;align-items:center}
+.text-button.outline{border:1px solid #9ac3b95c;border-radius:8px;margin:0;padding:10px 14px;color:#e6fff6}
+.net-status{display:flex;flex-direction:column;gap:6px;align-items:flex-start;margin:0 0 16px}
+.net-code{font:700 34px Manrope,Arial,sans-serif;letter-spacing:8px;color:#e9fff5}.net-label{font-size:11px;letter-spacing:3px;color:#9fc7bb}.net-link{width:100%;max-width:none;font-size:12px}.net-error{color:#ffb4a0}

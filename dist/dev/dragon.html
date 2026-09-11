@@ -110,7 +110,10 @@ function frame(now){
  dragon.position.set(0,pose.body*1.6,0);
  dragon.rotation.set(fake.pitch,fake.yaw,fake.roll,'YXZ');
  model.update(pose,fake,inL,inR,t);
- rider.update(inL,inR,fake,dt);
+ // rider.update() takes the RAW thumb positions (+1 = thumb slid up = that fist pushes forward, -1 = slid down = that
+ // fist pulls the rein back). ?input= here is the wing COMMAND (+1 = climb), which the game derives from the thumbs
+ // with its default invert, so the thumbs are the negated command.
+ rider.update(-inL,-inR,fake,dt);
  sun.position.copy(dragon.position).addScaledVector(sunDir,120);
  sun.target.position.copy(dragon.position);
  dragon.updateMatrixWorld(true);

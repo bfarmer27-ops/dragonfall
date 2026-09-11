@@ -358,7 +358,8 @@ export function createRider({saddleAnchor,bridleAnchors}){
  let shakeLeft=0,shakeDuration=.4,shakeTime=0;
  let thumpTime=10,lastExternalBeat=-10,elapsed=0;
  let steeringLead=0;
- let smoothClimb=0,smoothBank=0,lastBuiltClimb=NaN,lastBuiltBank=NaN,lastBuiltSpread=NaN;
+ // smoothPull[i] = how far hand i is pulled back toward the rider (+1 = that thumb slid fully down toward the rider).
+ let smoothPull=[0,0],smoothBank=0,lastBuiltPull=[NaN,NaN],lastBuiltBank=NaN,lastBuiltSpread=NaN;
  let prevBob=0,prevBobDelta=0;
  let aspect=16/9,spread=16/9,forcedAspect=null;   // spread = damped frame aspect the fists are placed from
  const _bridle=new THREE.Vector3(),_lastBridle=[new THREE.Vector3(1e9,0,0),new THREE.Vector3(1e9,0,0)];
@@ -388,12 +389,15 @@ export function createRider({saddleAnchor,bridleAnchors}){
   writeTube(reins[i].geometry,reinCurves[i],REIN_SEGMENTS,REIN_RADIAL,REIN_RADIUS);
  }
 
+ // l, r: RAW thumb positions (+1 = slid up, away from the rider; -1 = slid down, toward the rider). Sliding a thumb
+ // down pulls that side's rein, so the fist on that side draws back and up; r-l is the bank, as before.
  function update(l,r,flight,dt){
   dt=clamp(dt||0,0,.1);
   elapsed+=dt;
   const pitch=flight.pitch||0,roll=flight.roll||0,yaw=flight.yaw||0;
-  const climb=(l+r)/2,bank=(r-l)/2;
-  smoothClimb=damp(smoothClimb,climb,10,dt);
+  const bank=(r-l)/2;
+  smoothPull[0]=damp(smoothPull[0],-clamp(l||0,-1,1),10,dt);
+  smoothPull[1]=damp(smoothPull[1],-clamp(r||0,-1,1),10,dt);
   smoothBank=damp(smoothBank,bank,10,dt);
   // Fist spread follows the frame aspect so the fists sit in the bottom corners on a phone
   // (portrait, narrow) as well as on a landscape screen.
@@ -401,21 +405,22 @@ export function createRider({saddleAnchor,bridleAnchors}){
   const a=forcedAspect!==null?forcedAspect:(cam&&cam.aspect?cam.aspect:aspect);
   aspect=a;
   spread=damp(spread,a,8,dt);
-  // Hands: climb pulls both fists back and up; a bank drops the inner fist and lifts the outer.
+  // Hands: a pulled rein draws THAT fist back and up (both pulled = climb); a bank drops the inner fist and lifts the outer.
   for(let i=0;i<2;i++){
    const side=i===0?-1:1;
    const inner=(smoothBank>0)===(side>0);
    const hand=hands[i];
    const base=fistRest(side,spread,HAND_BASE[i]);
+   const pull=smoothPull[i];
    hand.position.x=base.x;
-   hand.position.z=base.z+.12*smoothClimb;
-   hand.position.y=base.y+.06*smoothClimb+(inner?-.08:.06)*Math.abs(smoothBank);
-   hand.rotation.x=-.15+.35*smoothClimb;
+   hand.position.z=base.z+.12*pull;
+   hand.position.y=base.y+.06*pull+(inner?-.08:.06)*Math.abs(smoothBank);
+   hand.rotation.x=-.15+.35*pull;
    hand.rotation.z=side*.12+(inner?-.15:.10)*Math.abs(smoothBank)*side;
   }
   // Reins follow the fists and the head; rebuild only when something moved.
-  const inputMoved=Math.abs(smoothClimb-lastBuiltClimb)>.004||Math.abs(smoothBank-lastBuiltBank)>.004||Math.abs(spread-lastBuiltSpread)>.002;
-  if(inputMoved){lastBuiltClimb=smoothClimb;lastBuiltBank=smoothBank;lastBuiltSpread=spread;}
+  const inputMoved=Math.abs(smoothPull[0]-lastBuiltPull[0])>.004||Math.abs(smoothPull[1]-lastBuiltPull[1])>.004||Math.abs(smoothBank-lastBuiltBank)>.004||Math.abs(spread-lastBuiltSpread)>.002;
+  if(inputMoved){lastBuiltPull[0]=smoothPull[0];lastBuiltPull[1]=smoothPull[1];lastBuiltBank=smoothBank;lastBuiltSpread=spread;}
   for(let i=0;i<2;i++){
    bridleAnchors[i].getWorldPosition(_bridle);
    saddleAnchor.worldToLocal(_bridle);

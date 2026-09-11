@@ -2,6 +2,11 @@
 // Uses the browser's SpeechRecognition (Chrome on Android and desktop; Safari on iOS 14.5+). Listening restarts itself
 // whenever the browser stops it. If the browser has no speech support, supported = false and the Fire button is the fallback.
 export const DEFAULT_FIRE_WORD='dracarys';
+// Statuses the browser will not recover from on its own: the microphone was denied, the speech service is blocked,
+// or there is no microphone. Chrome fires onerror(<one of these>) and then onend; onend must NOT reset them to
+// 'idle', or the Settings line would read 'starts listening when you take flight' about a microphone it never gets.
+// Only stop() (the user switching Voice fire off) clears them, so the next take-off asks the browser again.
+export const STICKY_STATUSES=['not-allowed','service-not-allowed','audio-capture'];
 export function readFireWord(){try{return (localStorage.getItem('dragonfall-fire-word')||DEFAULT_FIRE_WORD).trim()||DEFAULT_FIRE_WORD;}catch{return DEFAULT_FIRE_WORD;}}
 export function saveFireWord(word){const w=(word||'').trim()||DEFAULT_FIRE_WORD;try{localStorage.setItem('dragonfall-fire-word',w);}catch{}return w;}
 export const normalize=s=>(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
@@ -21,10 +26,10 @@ export function createSpeech({onFire,getWord=readFireWord,onStatus=()=>{}}={}){
  const SR=globalThis.SpeechRecognition||globalThis.webkitSpeechRecognition;
  const state={supported:!!SR,listening:false,status:SR?'idle':'unsupported',lastHeard:''};
  if(!SR)return {state,start(){},stop(){}};
- let rec=null,wantActive=false,cooldownUntil=0,restartTimer=0;
+ let rec=null,wantActive=false,cooldownUntil=0,restartTimer=0,restartDelay=300;
  function build(){
   rec=new SR();rec.continuous=true;rec.interimResults=true;rec.maxAlternatives=3;rec.lang=navigator.language||'en-US';
-  rec.onstart=()=>{state.listening=true;state.status='listening';onStatus(state);};
+  rec.onstart=()=>{state.listening=true;state.status='listening';restartDelay=300;onStatus(state);};
   rec.onresult=e=>{
    for(let i=e.resultIndex;i<e.results.length;i++){const alts=e.results[i];for(let j=0;j<alts.length;j++){const text=alts[j].transcript;state.lastHeard=text;
     if(performance.now()>cooldownUntil&&matchesFireWord(text,getWord())){cooldownUntil=performance.now()+1200;onFire(text);
@@ -32,12 +37,16 @@ export function createSpeech({onFire,getWord=readFireWord,onStatus=()=>{}}={}){
      try{rec.abort();}catch{}return;}}}
    onStatus(state);
   };
-  rec.onerror=e=>{state.status=e.error;if(e.error==='not-allowed'||e.error==='service-not-allowed'){wantActive=false;state.listening=false;}onStatus(state);};
-  rec.onend=()=>{state.listening=false;if(wantActive){clearTimeout(restartTimer);restartTimer=setTimeout(()=>{try{rec.start();}catch{}},300);}else{state.status='idle';onStatus(state);}};
+  // 'audio-capture' = no microphone on this device, so restarting is pointless; other errors back off 300 ms -> 5 s.
+  rec.onerror=e=>{state.status=e.error;if(STICKY_STATUSES.includes(e.error)){wantActive=false;state.listening=false;}else restartDelay=Math.min(5000,restartDelay*2);onStatus(state);};
+  // onend follows every stop, including the one right after a sticky error: keep that error on show, reset only a
+  // transient status ('listening', 'no-speech', 'aborted', 'network') to 'idle'.
+  rec.onend=()=>{state.listening=false;if(wantActive){clearTimeout(restartTimer);restartTimer=setTimeout(()=>{try{rec.start();}catch{}},restartDelay);}else{if(!STICKY_STATUSES.includes(state.status))state.status='idle';onStatus(state);}};
  }
  return {
   state,
-  start(){wantActive=true;if(!rec)build();try{rec.start();}catch{}},
+  // 'starting' until the browser answers with onstart (listening) or onerror (denied / no microphone / no service).
+  start(){wantActive=true;if(!rec)build();state.status='starting';onStatus(state);try{rec.start();}catch{}},
   stop(){wantActive=false;clearTimeout(restartTimer);try{rec?.stop();}catch{}state.listening=false;state.status='idle';onStatus(state);},
  };
 }
