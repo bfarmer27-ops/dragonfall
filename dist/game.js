@@ -936,6 +936,7 @@ function setCameraMode(next) {
  // The rider's hands, reins and saddle only exist from the saddle; the streamers only make sense from behind.
  rider.group.visible = isRider;
  for (const t of trails) t.line.visible = !isRider;
+ if (model.setRiderView) model.setRiderView(isRider);   // demon dragon: rider-view head/neck shrink + low neck (dragon-gltf.js)
  if (isRider) {
   scene.remove(camera);
   camera.position.set(0, 0, 0);

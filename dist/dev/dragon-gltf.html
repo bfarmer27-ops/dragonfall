@@ -12,6 +12,7 @@
 // ?dragon=classic|demon (also saved through saveDragonStyle; the <select> top-right switches and reloads)
 // ?bloom=0  ?env=<n> ?roughmap=1 ?headdist=<local units> ?span=<m> ?taillen=<local units> ?headpitchmax=<rad>  (demon tuning, see TUNE_DEFAULT)
 // ?neck=<rad> ?tail=<rad> ?pitch=<rad> ?rim=<n> ?headlevel=<n>  (demon pose tuning, see TUNE_DEFAULT in dragon-gltf.js)
+// ?headscale=<n> ?necktaper=<n> (rider-view head / last-3-neck-bone shrink) ?chaseneck ?chaseheadscale ?chasenecktaper (chase-view twins, used when ?view=chase)
 import * as THREE from 'three';
 import {RGBELoader} from 'three/addons/loaders/RGBELoader.js';
 import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
@@ -89,7 +90,8 @@ scene.add(skyDome);
 // ---- dragon + rider
 let readyAt=null;
 const tune={};
-for(const [k,key] of [['neck','neckExtend'],['tail','tailDroop'],['pitch','bodyPitch'],['rim','rim'],['headlevel','headLevel'],['alphatest','alphaTest'],['ao','ao'],['amp','wingAmp'],['neckamp','neckAmp'],['nofollow','noFollow'],['sway','sway'],['roughness','roughness'],['env','envMapIntensity'],['roughmap','roughMap'],['headdist','headFromSeat'],['span','spanWorld'],['taillen','tailLength'],['headpitchmax','headPitchMax'],['torso','torsoAmp'],['bob','bodyBob']])if(q.has(k))tune[key]=Number(q.get(k));
+for(const [k,key] of [['neck','neckExtend'],['tail','tailDroop'],['pitch','bodyPitch'],['rim','rim'],['headlevel','headLevel'],['alphatest','alphaTest'],['ao','ao'],['amp','wingAmp'],['neckamp','neckAmp'],['nofollow','noFollow'],['sway','sway'],['roughness','roughness'],['env','envMapIntensity'],['roughmap','roughMap'],['headdist','headFromSeat'],['span','spanWorld'],['taillen','tailLength'],['headpitchmax','headPitchMax'],['torso','torsoAmp'],['bob','bodyBob'],['headscale','headScale'],['necktaper','neckTaper'],['chaseneck','chaseNeckExtend'],['chaseheadscale','chaseHeadScale'],['chasenecktaper','chaseNeckTaper']])if(q.has(k))tune[key]=Number(q.get(k));
+if(chase)tune.riderView=false;   // chase view uses the chase* twins (game.js does the same through model.setRiderView)
 if(q.has('tint'))tune.tint=parseInt(q.get('tint'),16);   // ?tint=7d7269 (hex, no #)
 const beatHold=q.has('beat')?Number(q.get('beat')):null;   // ?beat=0..1 holds the demon flap at that fraction of a stroke (0 = wings at the top)
 const model=createDragon(renderer,{onReady:()=>{readyAt=performance.now();window.__bounds=model.bounds;},tune});

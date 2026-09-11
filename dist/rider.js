@@ -382,10 +382,22 @@ export function createRider({saddleAnchor,bridleAnchors}){
   handToGroup(i,0,.085*k,0,pts[2]);            // out of the top, between thumb and forefinger
   handToGroup(i,s*.07*k,.17*k,-.11*k,pts[3]);  // arcs up and forward
   pts[4].set(s*.55,-.24+tight*.34-slack,-1.5); // droops onto the back under its own weight
-  pts[5].set(s*.74,-.33+tight*.24-slack,-4.0); // rests on the neck flank
-  pts[6].set(s*.56,-.15+tight*.14,-7.4);
-  pts[7].set(s*.53,-.04+tight*.06,-9.6);
-  pts[8].copy(_lastBridle[i]);
+  const b=_lastBridle[i],route=bridleAnchors[i].userData&&bridleAnchors[i].userData.reinRoute;
+  if(route&&b.x<1e8){
+   // A dragon that sets bridleAnchors[i].userData.reinRoute (dragon-gltf.js: the demon dragon, whose rider-view tune
+   // hangs the mouth 2.25 m below the seat) routes the rope along its neck flank, and the last two points hang off the
+   // bridle ring so the far end follows the head wherever the tune puts it. The fixed points below were tuned for a
+   // head at seat height; on the low head they rose 2.3 m above the mouth and the rein tips hung in the sky (09-11).
+   const [sx,sy,sz]=route.shoulder,[fx,fy,fz]=route.flank,[kx,ky,kz]=route.skull;
+   pts[5].set(s*sx,sy+tight*.24-slack,sz);            // leaves the back, onto the shoulder side
+   pts[6].set(s*fx,b.y+fy+tight*.14,b.z+fz);          // upper flank, mid neck
+   pts[7].set(s*kx,b.y+ky+tight*.06,b.z+kz);          // upper flank beside the skull, just before the mouth
+  }else{
+   pts[5].set(s*.74,-.33+tight*.24-slack,-4.0);       // rests on the neck flank
+   pts[6].set(s*.56,-.15+tight*.14,-7.4);
+   pts[7].set(s*.53,-.04+tight*.06,-9.6);
+  }
+  pts[8].copy(b);                                     // the bridle ring at the mouth corner
   writeTube(reins[i].geometry,reinCurves[i],REIN_SEGMENTS,REIN_RADIAL,REIN_RADIUS);
  }
 

@@ -83,13 +83,27 @@ const HEAD_FROM_SEAT=6.1;            // dragon-local units, seat anchor -> head 
 const SPAN_TARGET_WORLD=46;          // metres tip to tip at the widest point of one flap (classic 34.6 m; wider is accepted)
 const TAIL_LENGTH_LOCAL=9.0;         // dragon-local units, tail root -> tail tip (classic tail 8.3 from z=2.53)
 const SEAT_BONE='spine_04';          // 3 spine bones behind the shoulders (spine_08 carries the clavicles)
+const NECK_TAPER_BONES=3;            // how many neck bones before the head get tune.neckTaper (neck_09..neck_11)
 // Pose corrections applied on top of the clip every frame (radians). The clip curls the neck up
 // Pose corrections applied on top of the clip every frame (radians). The clip curls the neck up
 // (head high and close) and the tail 12 m up; these spread a constant bend along the chains.
 // createDragon(renderer, {tune: {...}}) overrides them; model.tune is live.
 const TUNE_DEFAULT={
- neckExtend:0.25,     // total pitch over the neck bones (+ = head raised toward the rider's eye line); the head bone
- headLevel:1,        //   is counter-rotated by headLevel * neckExtend so it keeps looking ahead
+ neckExtend:-0.7,     // total pitch over the neck bones (+ = head raised toward the rider's eye line); the head bone
+ headLevel:1,        //   is counter-rotated by headLevel * neckExtend so it keeps looking ahead.
+                     //   Measured 09-11 (real game, rider view): at +.25 the neck climbed 27 degrees from its base and
+                     //   the head top sat at 27 % of the screen height (horn tips 18 %), hiding the gate rings (Ryan:
+                     //   "the head is in the way"). -.7 runs the neck ahead and DOWN: head top 52 % (1280x720),
+                     //   51 % (390x844), 47 % (844x390), the ring and the canyon clear above it
+ headScale:0.7,      // uniform scale of the head bone in the RIDER view (horns, jaw, eyes and the anchors follow);
+                     //   at .65 the horns vanished behind the neck spikes, .7 keeps the head readable
+ neckTaper:0.92,     // uniform scale of each of the last NECK_TAPER_BONES neck bones in the rider view (compounds:
+                     //   .92^3 = .78 at the head, so the head's total shrink is headScale * .78 = .55)
+ chaseNeckExtend:0.25,  // the same three knobs for the CHASE view (setRiderView(false)): the pre-09-11 look, unchanged.
+ chaseHeadScale:1.0,    //   The chase camera (game.js positionCamera) sits 17 m behind and looks 35 m ahead, so the head
+ chaseNeckTaper:1.0,    //   never blocks anything there. Measured 09-11 at 1280x720: with -.25/.85/.96 the head from
+                        //   behind was a hornless bump 6.4 % of the width wide (top 58 %); at +.25/1/1 the horned head
+                        //   stands above the back, 9.4 % wide (top 54 %). The rider-view shrink is rider-only by design.
  tailDroop:1.0,      // total pitch over the tail bones (+ = tail down)
  bodyPitch:0,        // nose angle after the spine has been levelled (+ = nose up), used at install
  wingAmp:0.55,       // weight of the clip's wing-bone tracks (1 = the clip's full stroke, 0 = T-pose).
@@ -206,6 +220,13 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
  headAnchor.position.copy(CLASSIC_HEAD);
  dragon.add(headAnchor);
  const bridleAnchors=CLASSIC_BRIDLE.map((p,i)=>{const a=new THREE.Object3D();a.name='bridle'+i;a.position.copy(p);dragon.add(a);return a;});
+ // Rein route for rider.js (saddle-local metres). This dragon's neck is 2 m thick and the rider-view tune hangs the
+ // mouth 2.25 m below the seat, so the rope has to run along the UPPER FLANK, outside the neck spikes and above the
+ // jaw flare, instead of the classic dragon's fixed points at seat height. Measured 09-11 in the real game: the neck's
+ // half-width stays under 1.10 m at heights -1.25..-1.75 from the shoulder to z=-8.5; the jaw flares to 1.73 m at
+ // height -2 near z=-8. shoulder = a fixed point; flank/skull = [x, y above the bridle ring, z behind the bridle ring].
+ // The classic dragon sets no route and keeps its old rope.
+ for(const a of bridleAnchors)a.userData.reinRoute={shoulder:[1.15,-.85,-4.0],flank:[1.2,.7,2.7],skull:[1.2,.6,.9]};
 
  // ---- placeholder body (a dark loft-ish capsule and two wing slabs) shown until the GLB arrives
  const placeholder=new THREE.Group();
@@ -279,6 +300,22 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
  let tipBones=[null,null],tipOffsets=[new THREE.Vector3(),new THREE.Vector3()],eyeBones=[];
  let saddleBase=new THREE.Vector3(),saddleUp=new THREE.Vector3(0,1,0),saddleUnit=1;
  let bodyProfile=null,applyBoneScalesFn=null,bobState=null;
+ // Rider view (default) vs chase view: the head/neck shrink and the neck bend differ per view (see TUNE_DEFAULT).
+ let riderView=tune.riderView===undefined?true:!!tune.riderView;
+ let headBone=null,taperBones=[],boneScalesRef=null;
+ const viewTune=key=>riderView?tune[key]:(tune['chase'+key[0].toUpperCase()+key.slice(1)]!==undefined?tune['chase'+key[0].toUpperCase()+key.slice(1)]:tune[key]);
+ function applyViewScales(){
+  if(!boneScalesRef||!headBone)return;
+  const hs=Math.max(1e-3,viewTune('headScale')),ts=Math.max(1e-3,viewTune('neckTaper'));
+  boneScalesRef.set(headBone,hs);
+  for(const b of taperBones)boneScalesRef.set(b,ts);
+ }
+ function setRiderView(flag){
+  riderView=!!flag;
+  applyViewScales();
+  if(applyBoneScalesFn)applyBoneScalesFn();
+  return riderView;
+ }
  const _bobTmp=new THREE.Vector3();
  const wings=[];
  const tailSegments=[];
@@ -379,6 +416,7 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
   // only when the clip value changed since its last write, so the clip writes these scales once
   // (first evaluation) and never again; applyBoneScales() re-applies ours after every mixer step.
   const boneScales=new Map();   // bone -> scalar
+  boneScalesRef=boneScales;
   function applyBoneScales(){
    for(const [b,k] of boneScales)b.scale.setScalar(k);
    const st=bobState;
@@ -495,6 +533,19 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
   for(const k of ['spineSpike_02','spineSpike_03','spineSpike_04'])if(bones[k])boneScales.set(bones[k],Math.max(1e-3,tune.saddleSpikes));
   if(bones.spineSpike_01)boneScales.set(bones.spineSpike_01,Math.max(1e-3,tune.frontSpike));
   setPose(topT);
+
+  // ---- head + neck-tip shrink (after the rig scale, so the seat-to-head distance is NOT re-grown to
+  //      compensate). The head bone and the last NECK_TAPER_BONES neck bones get a uniform scale
+  //      (tune.headScale / tune.neckTaper in the rider view, the chase* twins in the chase view; see
+  //      setRiderView). Applied before the anchors are measured so they land on the shrunken head.
+  {
+   headBone=bones.head;
+   const nb=[];
+   for(let i=1;i<=40;i++){const b=bones['neck_'+String(i).padStart(2,'0')];if(!b)break;nb.push(b);}
+   taperBones=nb.slice(Math.max(0,nb.length-NECK_TAPER_BONES));
+   applyViewScales();
+   setPose(topT);
+  }
 
   // ---- pelvis heave: the clip translates the pelvis (whole body) by 2.05 units over a flap at this
   //      scale; keep tune.bodyBob of it about the flap-mean position. Applied after every mixer step
@@ -703,6 +754,7 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
   // 1. the clip: advance by one flap per wingbeat (pose.frequency is beats per second)
   const freq=pose.frequency||.77;
   animTime+=dt*freq*beatSeconds;
+  applyViewScales();   // tune.headScale / neckTaper are live (dev page); cheap: 4 map writes
   if(wingAction.getEffectiveWeight()!==tune.wingAmp)wingAction.setEffectiveWeight(tune.wingAmp);
   if(neckAction.getEffectiveWeight()!==tune.neckAmp)neckAction.setEffectiveWeight(tune.neckAmp);
   if(torsoAction.getEffectiveWeight()!==tune.torsoAmp)torsoAction.setEffectiveWeight(tune.torsoAmp);
@@ -725,11 +777,11 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
   // 3. neck: head leads, each bone turns by its share (delta to the bone behind it) + a little sway
   frameQuat(torsoBone,_pq);
   const nSway=6/neckChain.length*(tune.sway!==undefined?tune.sway:1),nLast=neckChain.length-1;
-  const extend=tune.neckExtend/nLast;
+  const neckExtend=viewTune('neckExtend'),extend=neckExtend/nLast;
   for(let i=0;i<neckChain.length;i++){
    const prev=follow.neck[i],cur=follow.neck[i+1];
    _euler.set(
-    (cur.pitch-prev.pitch)+Math.sin(time*1.5-i*0.25)*0.008*nSway+(i<nLast?extend:-tune.neckExtend*tune.headLevel),
+    (cur.pitch-prev.pitch)+Math.sin(time*1.5-i*0.25)*0.008*nSway+(i<nLast?extend:-neckExtend*tune.headLevel),
     (cur.yaw-prev.yaw)+Math.sin(time*0.7-i*0.3)*0.02*nSway,
     (cur.roll-prev.roll),'YXZ');
    _R.setFromEuler(_euler);
@@ -786,6 +838,9 @@ export function createDragon(renderer,{onReady,onError,tune:tuneIn}={}){
   update,wingTip,setSun,setHurt,follow,setFollowGains,profileAt:demonProfileAt,
   // demon-only extras
   style:'demon',bounds,wingGains,setWingGains,tune,seekBeat,
+  // setRiderView(true): rider-view head/neck shrink + neck bend (tune.headScale/neckTaper/neckExtend);
+  // false: the chase* twins. game.js calls it from setCameraMode. Safe before the GLB is in.
+  setRiderView,get riderView(){return riderView;},
   get ready(){return ready;},get mixer(){return mixer;},get rig(){return rig;},get animTime(){return animTime;},
   get clipTime(){return mixer?mixer.time:0;}
  };
