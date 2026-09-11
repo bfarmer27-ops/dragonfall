@@ -662,7 +662,22 @@ $('fire').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropa
 // ---------------------------------------------------------------------------------------------
 let voiceFireEnabled = true;
 try { voiceFireEnabled = localStorage.getItem('dragonfall-voice-fire') !== 'false'; } catch {}
-const speech = createSpeech({onFire: () => fire('voice'), getWord: readFireWord, onStatus: showVoiceStatus});
+const speech = createSpeech({onFire: () => fire('voice'), getWord: readFireWord, onStatus: showVoiceStatus, onHeard: showHeard});
+// Small line under the distance counter: what the microphone hears, so a player can see why a word did not fire.
+let heardTimer = 0;
+function showHeard(text) {
+ const el = $('voice-hud');
+ el.textContent = 'heard: ' + String(text || '').trim().slice(-48);
+ el.classList.add('show');
+ clearTimeout(heardTimer);
+ heardTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+function showMicState(state) {
+ const el = $('mic-state');
+ const word = readFireWord().split(/[,;/|]+/)[0].trim();
+ const map = {listening: 'mic on · say "' + word + '"', starting: 'mic…', 'no-speech': 'mic on · say "' + word + '"', aborted: 'mic on', network: 'mic: no network', 'not-allowed': 'mic blocked · use FIRE', 'service-not-allowed': 'mic blocked · use FIRE', 'audio-capture': 'no mic · use FIRE', unsupported: 'no voice · use FIRE', idle: ''};
+ el.textContent = voiceFireEnabled ? (map[state.status] ?? state.status) : '';
+}
 function showVoiceStatus(state) {
  const word = readFireWord();
  const denied = 'Voice: microphone denied. Allow the microphone for this site, or use the FIRE button / F key.';
@@ -681,6 +696,7 @@ function showVoiceStatus(state) {
  let text = map[state.status] || ('Voice: ' + state.status + '.');
  if (state.lastHeard && state.listening) text += ' Heard: "' + state.lastHeard.trim().slice(-40) + '".';
  $('voice-status').textContent = text;
+ showMicState(state);
 }
 function startVoice() {
  if (!voiceFireEnabled || !speech.state.supported) { showVoiceStatus(speech.state); return; }
@@ -692,6 +708,16 @@ function startVoice() {
 $('speed-slider').addEventListener('input', () => {
  const v = setSpeedMultiplier($('speed-slider').value);   // live: flight.js reads the multiplier every physics step
  $('speed-value').value = v.toFixed(2) + 'x';
+});
+// 'Test the microphone': starts listening right from the tap (so the browser's microphone prompt is allowed to show)
+// and the status line prints what is heard, without taking flight.
+$('voice-test').addEventListener('click', () => {
+ if (!speech.state.supported) { showVoiceStatus(speech.state); return; }
+ voiceFireEnabled = true; $('voice-fire').checked = true;
+ try { localStorage.setItem('dragonfall-voice-fire', 'true'); } catch {}
+ speech.stop();      // clears a stale 'denied' so the browser is asked again
+ speech.start();
+ showVoiceStatus(speech.state);
 });
 $('fire-word').addEventListener('change', () => { $('fire-word').value = saveFireWord($('fire-word').value); showVoiceStatus(speech.state); });
 $('voice-fire').addEventListener('change', () => {

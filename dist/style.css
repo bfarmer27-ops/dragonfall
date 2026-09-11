@@ -48,3 +48,5 @@
 .text-button.outline{border:1px solid #9ac3b95c;border-radius:8px;margin:0;padding:10px 14px;color:#e6fff6}
 .net-status{display:flex;flex-direction:column;gap:6px;align-items:flex-start;margin:0 0 16px}
 .net-code{font:700 34px Manrope,Arial,sans-serif;letter-spacing:8px;color:#e9fff5}.net-label{font-size:11px;letter-spacing:3px;color:#9fc7bb}.net-link{width:100%;max-width:none;font-size:12px}.net-error{color:#ffb4a0}
+
+.voice-hud{position:absolute;top:calc(27% + 26px);left:50%;transform:translateX(-50%);font-size:12px;letter-spacing:1.5px;color:#ffd9a8;text-shadow:0 1px 12px #001a18;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap;z-index:5}.voice-hud.show{opacity:1}.mic-state{position:absolute;top:calc(27% + 44px);left:50%;transform:translateX(-50%);font-size:11px;letter-spacing:1.5px;color:#b8d6cf;text-shadow:0 1px 12px #001a18;opacity:0;pointer-events:none;white-space:nowrap;z-index:5}.playing .mic-state{opacity:.85}
